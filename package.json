@@ -27,42 +27,75 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
+    "import:meddra": "ts-node src/cli.ts",
     "prepare": "husky"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts",
+      "tsx"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)sx?$": "ts-jest"
     },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "transformIgnorePatterns": [
+      "node_modules/(?!.*(@scure|@noble))"
+    ],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1095.0",
+    "@aws-sdk/s3-request-presigner": "^3.1095.0",
+    "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.13",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.13",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.13",
     "@nestjs/swagger": "^11.0.6",
     "@nestjs/terminus": "^11.0.0",
     "@nestjs/throttler": "^6.4.0",
     "@prisma/client": "^6.5.0",
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.1.0",
     "@sentry/node": "^9.0.0",
+    "argon2": "^0.45.1",
+    "bullmq": "^5.81.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cookie-parser": "^1.4.7",
+    "exceljs": "^4.4.0",
+    "file-type": "^22.0.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
+    "multer": "^2.2.0",
+    "nest-commander": "^3.20.1",
     "nestjs-pino": "^4.2.0",
+    "otplib": "^13.4.1",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pdfkit": "^0.19.1",
     "pino-http": "^10.4.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.18.0",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1",
+    "undici": "^8.9.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -74,7 +107,13 @@
     "@types/cookie-parser": "^1.4.8",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
+    "@types/multer": "^2.2.0",
     "@types/node": "^22.13.4",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/pdfkit": "^0.17.6",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/supertest": "^6.0.2",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
@@ -104,10 +143,14 @@
     ]
   },
   "pnpm": {
+    "overrides": {
+      "js-yaml@>=5.0.0 <5.2.2": ">=5.2.2"
+    },
     "onlyBuiltDependencies": [
       "@prisma/client",
       "@prisma/engines",
       "@scarf/scarf",
+      "argon2",
       "prisma"
     ]
   }
