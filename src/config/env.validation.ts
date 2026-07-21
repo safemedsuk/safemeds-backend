@@ -39,6 +39,17 @@ const optionalUrl = z.preprocess(
   z.string().url().optional(),
 )
 
+/**
+ * For integrations that aren't provisioned yet (Stage 3's email/WhatsApp
+ * vendor accounts — see `vg-stage3-setup.md`) — an empty string in `.env`
+ * means "not configured," not "configured as blank." Every service that
+ * reads one of these checks for `undefined` at call time and throws a
+ * clear `..._NOT_CONFIGURED` error rather than the app failing to boot —
+ * these are real features waiting on a real account/DNS setup, not a
+ * required part of every environment.
+ */
+const optionalString = z.preprocess((val) => (val === '' ? undefined : val), z.string().optional())
+
 export const envSchema = z.object({
   // ── Application ──────────────────────────────────────────────────────
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -61,7 +72,7 @@ export const envSchema = z.object({
   JWT_MFA_PENDING_SECRET: z
     .string()
     .min(32, 'JWT_MFA_PENDING_SECRET must be at least 32 characters'),
-  JWT_MFA_PENDING_EXPIRES_IN: z.string().default('5m'),
+  JWT_MFA_PENDING_EXPIRES_IN_MINUTES: z.coerce.number().int().positive().default(5),
 
   // ── Cookies & CSRF ────────────────────────────────────────────────────
   COOKIE_DOMAIN: z.string().optional(),
@@ -79,6 +90,13 @@ export const envSchema = z.object({
     .string()
     .length(64, 'MFA_ENCRYPTION_KEY must be a 64-character hex string (32 bytes for AES-256-GCM)'),
 
+  // ── VigiCloud Stage 0.3 — text-level encryption at rest ──────────────
+  // Deliberately separate from MFA_ENCRYPTION_KEY (see
+  // TextEncryptionService's doc comment) even though both are AES-256-GCM.
+  TEXT_ENCRYPTION_KEY: z
+    .string()
+    .length(64, 'TEXT_ENCRYPTION_KEY must be a 64-character hex string (32 bytes for AES-256-GCM)'),
+
   // ── Re-authentication (signature-grade tokens) ───────────────────────
   REAUTH_TOKEN_EXPIRES_IN_MINUTES: z.coerce.number().int().positive().default(5),
 
@@ -92,12 +110,10 @@ export const envSchema = z.object({
   LOGIN_LOCKOUT_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
   LOGIN_LOCKOUT_DURATION_MINUTES: z.coerce.number().int().positive().default(15),
 
-  // ── Rate limiting (global default + auth-specific overrides) ─────────
+  // ── Rate limiting (global default; auth-route overrides are hardcoded
+  // via @Throttle() in auth.controller.ts, not env-configurable) ────────
   THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
-  AUTH_THROTTLE_REGISTER_LIMIT_PER_HOUR: z.coerce.number().int().positive().default(3),
-  AUTH_THROTTLE_LOGIN_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
-  AUTH_THROTTLE_RESEND_CODE_SECONDS: z.coerce.number().int().positive().default(60),
 
   // ── Email (Resend) ────────────────────────────────────────────────────
   RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
@@ -127,6 +143,22 @@ export const envSchema = z.object({
 
   // ── CORS ──────────────────────────────────────────────────────────────
   CORS_ADDITIONAL_ORIGINS: csvList.optional(),
+
+  // ── VigiCloud Stage 3.3 — inbound email ingestion ────────────────────
+  // See `vg-stage3-setup.md` for what to configure in Resend + DNS.
+  // All optional: the webhook endpoint returns a clear "not configured"
+  // error rather than the app refusing to boot when these are unset.
+  RESEND_INBOUND_WEBHOOK_SECRET: optionalString,
+  EMAIL_INTAKE_DOMAIN: optionalString,
+
+  // ── VigiCloud Stage 3.4 — WhatsApp Business Platform (Meta Cloud API) ──
+  // See `vg-stage3-setup.md` for the full Meta Business onboarding steps.
+  WHATSAPP_ACCESS_TOKEN: optionalString,
+  WHATSAPP_PHONE_NUMBER_ID: optionalString,
+  WHATSAPP_BUSINESS_ACCOUNT_ID: optionalString,
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: optionalString,
+  WHATSAPP_APP_SECRET: optionalString,
+  WHATSAPP_API_VERSION: z.string().default('v21.0'),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
