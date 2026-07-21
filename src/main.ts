@@ -1,3 +1,5 @@
+import './common/net/force-ipv4-fetch'
+
 import { ConfigService } from '@nestjs/config'
 import { NestFactory } from '@nestjs/core'
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
@@ -9,7 +11,15 @@ import { configureApp } from './bootstrap'
 import { EnvConfig } from './config/env.validation'
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true })
+  // `rawBody: true` exposes `req.rawBody` (the exact bytes received)
+  // alongside the normal parsed JSON body — needed by Stage 3's inbound
+  // webhooks (Resend's inbound-email webhook, Meta's WhatsApp webhook),
+  // both of which sign the *raw* request body and would silently fail
+  // signature verification against a re-serialized JSON.stringify of the
+  // parsed body (key order/whitespace aren't guaranteed to round-trip).
+  // Every other route is completely unaffected — this only adds the raw
+  // buffer, it doesn't change how the body is parsed for existing routes.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true })
   const configService = app.get<ConfigService<EnvConfig, true>>(ConfigService)
 
   app.useLogger(app.get(Logger))
