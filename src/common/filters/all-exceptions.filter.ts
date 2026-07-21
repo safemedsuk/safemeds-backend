@@ -1,13 +1,25 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
-import type { Response } from 'express'
+import type { Request, Response } from 'express'
 import { Logger } from 'nestjs-pino'
+
+import type { RequestWithId } from '../middleware/request-id.middleware'
 
 interface ErrorEnvelope {
   error: {
     code: string
     message: string
     details?: unknown
+    /** Request-id, always present — the same value logged server-side and sent as the X-Request-Id header, so a report of "I got this error" can be matched to a log line without guesswork. */
+    requestId?: string
+    /**
+     * Only ever populated when NODE_ENV !== 'production' (see `catch()`
+     * below) — the real exception message/name/stack for a genuine 500.
+     * Never sent in production: internals must not leak to end users
+     * there, they get the same generic `message` a dev sees locally,
+     * just without this field.
+     */
+    debug?: { name: string; message: string; stack?: string }
   }
 }
 
@@ -34,10 +46,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>()
+    const request = host.switchToHttp().getRequest<Request>()
+    const requestId = (request as RequestWithId).id
     const resolved = this.resolve(exception)
+    const isUnhandled = resolved.status >= 500
 
-    if (resolved.status >= 500) {
-      this.logger.error({ err: exception }, `Unhandled exception: ${resolved.message}`)
+    if (isUnhandled) {
+      this.logger.error({ err: exception, requestId }, `Unhandled exception: ${resolved.message}`)
     }
 
     const envelope: ErrorEnvelope = {
@@ -45,10 +60,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
         code: resolved.code,
         message: resolved.message,
         ...(resolved.details !== undefined ? { details: resolved.details } : {}),
+        ...(requestId ? { requestId } : {}),
+        // Never sent in production — see the `debug` field's doc comment above.
+        ...(isUnhandled && process.env.NODE_ENV !== 'production'
+          ? { debug: this.debugInfo(exception) }
+          : {}),
       },
     }
 
     response.status(resolved.status).json(envelope)
+  }
+
+  private debugInfo(exception: unknown): { name: string; message: string; stack?: string } {
+    if (exception instanceof Error) {
+      return { name: exception.name, message: exception.message, stack: exception.stack }
+    }
+    return { name: 'UnknownException', message: String(exception) }
   }
 
   private resolve(exception: unknown): ResolvedError {
@@ -75,17 +102,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const body = exception.getResponse()
 
     if (typeof body === 'object' && body !== null) {
-      const { message, error } = body as { message?: string | string[]; error?: string }
+      const { message, error, code, ...rest } = body as Record<string, unknown>
+      delete rest.statusCode
 
       if (Array.isArray(message)) {
         return { status, code: 'VALIDATION_ERROR', message: 'Validation failed', details: message }
       }
 
-      return {
-        status,
-        code: HTTP_STATUS_CODES[status] ?? 'HTTP_ERROR',
-        message: message ?? error ?? exception.message,
-      }
+      const resolvedCode =
+        typeof code === 'string' ? code : (HTTP_STATUS_CODES[status] ?? 'HTTP_ERROR')
+      const resolvedMessage =
+        typeof message === 'string'
+          ? message
+          : typeof error === 'string'
+            ? error
+            : exception.message
+      const details = Object.keys(rest).length > 0 ? rest : undefined
+
+      return { status, code: resolvedCode, message: resolvedMessage, details }
     }
 
     return { status, code: HTTP_STATUS_CODES[status] ?? 'HTTP_ERROR', message: exception.message }
