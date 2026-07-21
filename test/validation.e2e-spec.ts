@@ -6,6 +6,7 @@ import request from 'supertest'
 
 import { AppModule } from '../src/app.module'
 import { configureApp } from '../src/bootstrap'
+import { Public } from '../src/common/decorators/public.decorator'
 import { EnvConfig } from '../src/config/env.validation'
 import { httpServer } from './utils/create-test-app'
 
@@ -23,6 +24,7 @@ class PingDto {
 
 @Controller('test-validation')
 class TestValidationController {
+  @Public()
   @Post()
   ping(@Body() dto: PingDto): PingDto {
     return dto
@@ -64,6 +66,7 @@ describe('Validation error shape (e2e)', () => {
         code: 'VALIDATION_ERROR',
         message: 'Validation failed',
         details: expect.arrayContaining([expect.stringContaining('name')]),
+        requestId: expect.any(String),
       },
     })
   })
