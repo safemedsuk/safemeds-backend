@@ -9,5 +9,6 @@ import { RedisHealthIndicator } from './indicators/redis-health.indicator'
   imports: [TerminusModule],
   controllers: [HealthController],
   providers: [PrismaHealthIndicator, RedisHealthIndicator],
+  exports: [PrismaHealthIndicator, RedisHealthIndicator],
 })
 export class HealthModule {}
