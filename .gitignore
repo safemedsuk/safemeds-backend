@@ -1,0 +1,34 @@
+# compiled output
+/dist
+/node_modules
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# env
+.env
+.env.test
+.env.*.local
+!.env.example
+!.env.test.example
+
+# IDE
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+
+# tests
+/coverage
+/test/coverage
+
+# prisma
+prisma/*.db
+
+# misc
+*.tsbuildinfo
+.pnpm-store
