@@ -1,0 +1,512 @@
+erDiagram
+
+%% ============================================================
+%% SafeMeds ERD v2 — 24 Jul 2026
+%% Changes vs v1: auth & account lifecycle entities added;
+%% COMPANY_MARKET + FACILITY master data; REPORT_TYPE taxonomy
+%% from the six official PPB forms; PV case model expanded to
+%% cover ADR/quality/med-error/device/AEFI/transfusion forms;
+%% follow-up reports; VigiFlow references on submissions.
+%% ============================================================
+
+%% ============ 1. TENANCY, IDENTITY & AUTH ============
+
+    COMPANY {
+        uuid id PK
+        string name
+        string company_type "manufacturer | importer_distributor | pharmacy_chain | e_pharmacy"
+        uuid home_country_id FK
+        string status "active | suspended"
+    }
+    COMPANY_REGISTRATION {
+        uuid id PK
+        string reference_number "REG-2026-XXXXX"
+        string company_name
+        string company_type
+        uuid country_id FK
+        string licence_number
+        string licence_doc_key "uploaded certificate (R2/S3)"
+        string admin_email
+        string status "pending_verification | under_review | approved | rejected"
+        uuid reviewed_by
+        timestamptz decided_at
+    }
+    COMPANY_MARKET {
+        uuid company_id FK
+        uuid country_id FK "operating markets beyond home"
+        timestamptz activated_at
+    }
+    FACILITY {
+        uuid id PK
+        uuid company_id FK
+        string name
+        string facility_code "MFL / facility code on PPB forms"
+        string county
+        string sub_county
+        string address
+        string phone
+    }
+    USER {
+        uuid id PK
+        uuid company_id FK "null = platform-side staff"
+        string email
+        string full_name
+        string status "active | deactivated (never deleted)"
+        string platform_role "null | super_admin | operations | support"
+        bool is_external "e.g. consultant QPPV"
+        bool must_change_password
+        int token_version "bump = revoke all access tokens"
+    }
+    ROLE {
+        uuid id PK
+        string role_key "QPPV, QUALITY_MANAGER, EXEC_READONLY..."
+        string name
+    }
+    USER_ROLE {
+        uuid user_id FK
+        uuid role_id FK
+        timestamptz assigned_at
+    }
+    PERMISSION {
+        uuid id PK
+        string permission_key "e.g. cases.approve_submission"
+    }
+    ROLE_PERMISSION {
+        uuid role_id FK
+        uuid permission_id FK
+    }
+    INVITATION {
+        uuid id PK
+        uuid company_id FK
+        string email
+        string role_keys "pre-assigned roles"
+        string token_hash "single-use, 7-day expiry"
+        uuid invited_by FK
+        timestamptz expires_at
+        string status "pending | accepted | expired | revoked"
+    }
+    REFRESH_TOKEN {
+        uuid id PK
+        uuid user_id FK
+        string token_hash "rotated on every use"
+        string device
+        inet ip
+        timestamptz expires_at
+        timestamptz revoked_at
+    }
+    AUTH_TOKEN {
+        uuid id PK
+        uuid user_id FK
+        string purpose "email_verification | password_reset | signature_grade"
+        string token_hash "single-use"
+        timestamptz expires_at
+        timestamptz consumed_at
+    }
+    MFA_CREDENTIAL {
+        uuid id PK
+        uuid user_id FK
+        string method "totp | sms"
+        string secret_encrypted
+        string recovery_codes_hashed
+        timestamptz enabled_at
+    }
+    LOGIN_ATTEMPT {
+        uuid id PK
+        string email
+        uuid user_id FK "nullable"
+        bool success
+        inet ip
+        timestamptz occurred_at
+    }
+    SECURITY_POLICY {
+        uuid id PK
+        uuid company_id FK
+        int min_password_length "floor 12"
+        int session_timeout_minutes
+        bool mfa_required_for_signature_roles
+    }
+
+    COMPANY ||--o{ USER : employs
+    COMPANY ||--o{ COMPANY_MARKET : operates_in
+    COUNTRY ||--o{ COMPANY_MARKET : market
+    COMPANY ||--o{ FACILITY : runs
+    COMPANY ||--|| SECURITY_POLICY : governed_by
+    COMPANY_REGISTRATION ||--o| COMPANY : approved_into
+    USER ||--o{ USER_ROLE : has
+    ROLE ||--o{ USER_ROLE : grants
+    ROLE ||--o{ ROLE_PERMISSION : holds
+    PERMISSION ||--o{ ROLE_PERMISSION : in
+    COMPANY ||--o{ INVITATION : issues
+    USER ||--o{ REFRESH_TOKEN : sessions
+    USER ||--o{ AUTH_TOKEN : single_use_tokens
+    USER ||--o| MFA_CREDENTIAL : secured_by
+    USER ||--o{ LOGIN_ATTEMPT : attempts
+
+%% ============ 2. COUNTRY RULES ENGINE ============
+
+    COUNTRY {
+        uuid id PK
+        string iso_code
+        string name
+    }
+    REGULATORY_AUTHORITY {
+        uuid id PK
+        uuid country_id FK
+        string code "PPB, NVIP-DHIS2, NAFDAC, NDA..."
+        string name
+    }
+    REPORT_TYPE {
+        uuid id PK
+        string type_key "adr | quality_complaint | medication_error | device_incident | aefi | transfusion_reaction"
+        string name "the six official Kenyan forms; other countries may configure fewer/more"
+    }
+    REPORTING_RULE {
+        uuid id PK
+        uuid authority_id FK
+        uuid report_type_id FK
+        string seriousness_class
+        int window_days "KENYA VALUES STILL UNVERIFIED (Q1)"
+        string day_type "calendar | business"
+        string clock_start "awareness_date"
+        int version
+        date effective_from
+    }
+    SERIOUSNESS_DEFINITION {
+        uuid id PK
+        uuid authority_id FK
+        string criterion_key "per FOM001: hospitalisation, disability, congenital_anomaly, life_threatening, death"
+        string label
+        int version
+    }
+    FORM_SCHEMA {
+        uuid id PK
+        uuid country_id FK "null = global default"
+        uuid report_type_id FK
+        int version
+        jsonb json_schema "digitised official form incl. checklists"
+        string official_form_code "e.g. FOM001/MIP/PMS/SOP/001"
+        string status "draft | active | retired"
+    }
+    SUBMISSION_FORMAT {
+        uuid id PK
+        uuid authority_id FK
+        uuid report_type_id FK
+        int version
+        string template_ref "field mapping to authority output"
+        string channel "vigiflow | dhis2 | portal | paper_pdf"
+        string status
+    }
+
+    COUNTRY ||--o{ REGULATORY_AUTHORITY : regulates_via
+    REGULATORY_AUTHORITY ||--o{ REPORTING_RULE : defines
+    REPORT_TYPE ||--o{ REPORTING_RULE : ruled_by
+    REGULATORY_AUTHORITY ||--o{ SERIOUSNESS_DEFINITION : defines
+    COUNTRY ||--o{ FORM_SCHEMA : configures
+    REPORT_TYPE ||--o{ FORM_SCHEMA : shaped_by
+    REGULATORY_AUTHORITY ||--o{ SUBMISSION_FORMAT : accepts
+    REPORT_TYPE ||--o{ SUBMISSION_FORMAT : formatted_by
+
+%% ============ 3. WORKFLOW ENGINE ============
+
+    WORKFLOW_DEFINITION {
+        uuid id PK
+        string record_type
+        uuid report_type_id FK "nullable - per report type flows"
+        uuid country_id FK "null = default flow"
+        int version
+        string status
+    }
+    WORKFLOW_STATE {
+        uuid id PK
+        uuid definition_id FK
+        string state_key
+        string name
+        bool is_initial
+        bool is_terminal
+    }
+    WORKFLOW_TRANSITION {
+        uuid id PK
+        uuid definition_id FK
+        uuid from_state_id FK
+        uuid to_state_id FK
+        uuid required_role_id FK
+        bool requires_signature
+    }
+    WORKFLOW_INSTANCE {
+        uuid id PK
+        uuid definition_id FK
+        string record_type "polymorphic ->"
+        uuid record_id "-> any regulated record"
+        uuid current_state_id FK
+        timestamptz entered_at
+    }
+    DEADLINE {
+        uuid id PK
+        uuid company_id FK
+        string record_type
+        uuid record_id
+        uuid reporting_rule_id FK
+        timestamptz due_at
+        string status "pending | met | missed | recalculated"
+    }
+    TASK {
+        uuid id PK
+        uuid company_id FK
+        string record_type
+        uuid record_id
+        uuid assignee_user_id FK "nullable"
+        uuid assignee_role_id FK "nullable - role queue"
+        string title
+        timestamptz due_at
+        string status
+    }
+    NOTIFICATION {
+        uuid id PK
+        uuid user_id FK
+        uuid task_id FK
+        string channel "push | email | in_app"
+        timestamptz sent_at
+        timestamptz read_at
+    }
+
+    WORKFLOW_DEFINITION ||--o{ WORKFLOW_STATE : contains
+    WORKFLOW_DEFINITION ||--o{ WORKFLOW_TRANSITION : contains
+    WORKFLOW_STATE ||--o{ WORKFLOW_TRANSITION : from
+    WORKFLOW_STATE ||--o{ WORKFLOW_TRANSITION : to
+    ROLE ||--o{ WORKFLOW_TRANSITION : gates
+    WORKFLOW_DEFINITION ||--o{ WORKFLOW_INSTANCE : instantiates
+    WORKFLOW_STATE ||--o{ WORKFLOW_INSTANCE : current
+    REPORTING_RULE ||--o{ DEADLINE : computed_from
+    USER |o--o{ TASK : assigned
+    ROLE |o--o{ TASK : queued_for
+    TASK ||--o{ NOTIFICATION : triggers
+    USER ||--o{ NOTIFICATION : receives
+
+%% ============ 4. AUDIT & SIGNATURES (append-only) ============
+
+    AUDIT_ENTRY {
+        uuid id PK
+        uuid company_id FK
+        string record_type
+        uuid record_id
+        string action "create | update | state_change | sign | login | platform_access..."
+        jsonb old_value
+        jsonb new_value
+        uuid actor_id FK "or system"
+        string actor_role "copied at time of action"
+        timestamptz occurred_at
+        inet ip_address
+    }
+    SIGNATURE_EVENT {
+        uuid id PK
+        uuid company_id FK
+        string record_type
+        uuid record_id
+        string record_hash_sha256
+        uuid signer_id FK
+        string role_at_signing
+        string intent_statement
+        timestamptz signed_at
+        string auth_method "password_reauth (+mfa)"
+    }
+
+    USER ||--o{ AUDIT_ENTRY : performed
+    USER ||--o{ SIGNATURE_EVENT : signed
+
+%% ============ 5. MASTER DATA ============
+
+    PRODUCT {
+        uuid id PK
+        uuid company_id FK
+        string brand_name
+        string generic_name "INN"
+        string product_category "medicinal | blood_product | herbal | cosmeceutical | vaccine | device_ivd | other"
+        string dosage_form
+        string strength
+    }
+    PRODUCT_REGISTRATION {
+        uuid id PK
+        uuid product_id FK
+        uuid authority_id FK
+        string registration_number
+        string status
+        date issued_on
+        date expires_on
+    }
+    BATCH {
+        uuid id PK
+        uuid product_id FK
+        string batch_number
+        date manufactured_on
+        date expires_on
+    }
+    MEDDRA_VERSION {
+        uuid id PK
+        string version_label
+        date released_on
+    }
+    MEDDRA_TERM {
+        uuid id PK
+        uuid version_id FK
+        string code
+        string level "SOC | HLGT | HLT | PT | LLT"
+        string name
+        uuid parent_id FK
+    }
+
+    COMPANY ||--o{ PRODUCT : owns
+    PRODUCT ||--o{ PRODUCT_REGISTRATION : registered_as
+    REGULATORY_AUTHORITY ||--o{ PRODUCT_REGISTRATION : grants
+    PRODUCT ||--o{ BATCH : produced_in
+    MEDDRA_VERSION ||--o{ MEDDRA_TERM : contains
+    MEDDRA_TERM |o--o{ MEDDRA_TERM : parent_of
+
+%% ============ 6. DOCUMENTS & STORAGE ============
+
+    DOCUMENT {
+        uuid id PK
+        uuid company_id FK
+        string record_type
+        uuid record_id
+        string kind "generated_report, source_photo, sample_evidence, sop..."
+        uuid current_version_id
+    }
+    DOCUMENT_VERSION {
+        uuid id PK
+        uuid document_id FK
+        int version_no
+        string s3_key
+        string sha256
+        uuid uploaded_by FK
+        timestamptz uploaded_at
+    }
+
+    DOCUMENT ||--o{ DOCUMENT_VERSION : versioned_as
+    USER ||--o{ DOCUMENT_VERSION : uploaded
+
+%% ============ 7. VIGICLOUD DOMAIN (aligned to the six PPB forms) ============
+
+    PV_CASE {
+        uuid id PK
+        uuid company_id FK
+        string case_number
+        uuid country_id FK
+        uuid authority_id FK
+        uuid report_type_id FK "which of the six forms"
+        bool is_follow_up "FOM001 Initial vs Follow Up"
+        uuid parent_case_id FK "self-ref for follow-ups"
+        bool therapeutic_ineffectiveness "checkbox on ADR + pink forms"
+        string product_category "form product-category tick"
+        string seriousness_class
+        string severity "mild | moderate | severe | fatal | unknown (FOM001 §8.I)"
+        date awareness_date "starts the deadline clock"
+        date event_date "onset / incident / error date"
+        string event_time "blue + AEFI forms capture time"
+        uuid facility_id FK "institution details block"
+        string received_via
+        text medical_history "FOM001 §3"
+        text lab_investigations "FOM001 §7"
+        text comments "FOM001 §9 / RCA on blue form"
+        uuid form_schema_id FK "pins captured form version"
+        jsonb form_payload "type-specific sections: complaint ticks, error causes, device details, storage Qs, vitals..."
+    }
+    CASE_PATIENT {
+        uuid id PK
+        uuid case_id FK
+        string initials
+        string ip_op_number
+        string ward_clinic
+        int age_value
+        string age_unit
+        date date_of_birth "form asks DOB OR age"
+        string sex
+        numeric weight_kg
+        numeric height_cm
+        string known_allergy
+        string pregnancy_status "na | not_pregnant | trimester_1|2|3"
+        string guardian_name "AEFI - if child"
+    }
+    CASE_REPORTER {
+        uuid id PK
+        uuid case_id FK
+        string reporter_role "initial | submitter (both on every PPB form)"
+        string reporter_type "pharmacist | physician | patient | caregiver..."
+        string name
+        string cadre_designation
+        string contact "mobile / email"
+        date report_date
+    }
+    CASE_PRODUCT {
+        uuid id PK
+        uuid case_id FK
+        uuid product_id FK "nullable - non-company products allowed"
+        uuid batch_id FK "nullable"
+        string free_text_product "when not in catalog"
+        string drug_role "suspect | concomitant | past_medication | intended | error | vaccine | diluent | blood_component"
+        string manufacturer_name "as written on form"
+        string dose_text
+        string route
+        string frequency
+        date treatment_start
+        date treatment_stop
+        string indication
+        int dose_number "AEFI dose no."
+        string component_ref "transfusion pint no / volume"
+        string action_taken "withdrawn | reduced | increased | unchanged | na | unknown"
+        string dechallenge "yes | no | unknown | na (FOM001 §6)"
+        string rechallenge "yes | no | unknown | na"
+        string storage_condition "pink form storage/cold-chain Qs"
+        bool cold_chain_intact
+    }
+    CASE_EVENT {
+        uuid id PK
+        uuid case_id FK
+        text verbatim_text "reporter's words - never altered"
+        uuid meddra_term_id FK "ADR-type cases"
+        uuid meddra_version_id FK
+        string complaint_category "pink form ticks: color_change, moulding, caking, mislabeling..."
+        string outcome "recovered | recovered_with_sequelae | recovering | not_recovered | death | unknown"
+        bool is_serious
+        string seriousness_criteria "hospitalisation | disability | congenital_anomaly | life_threatening | death"
+    }
+    CASE_NARRATIVE {
+        uuid id PK
+        uuid case_id FK
+        int version_no
+        text body_text
+        bool ai_generated
+        uuid approved_by FK
+        timestamptz approved_at
+    }
+    SUBMISSION {
+        uuid id PK
+        uuid case_id FK
+        uuid authority_id FK
+        uuid format_id FK
+        timestamptz due_at
+        string status
+        timestamptz submitted_at
+        string authority_report_number "ADR Report No (PPB official-use)"
+        string vigiflow_entry_number "PPB official-use block"
+        timestamptz committed_at "VigiFlow date committed"
+        uuid output_document_id FK
+    }
+
+    COMPANY ||--o{ PV_CASE : owns
+    REPORT_TYPE ||--o{ PV_CASE : classified_as
+    FACILITY |o--o{ PV_CASE : reported_from
+    FORM_SCHEMA ||--o{ PV_CASE : captured_under
+    PV_CASE |o--o{ PV_CASE : follow_up_of
+    PV_CASE ||--o| CASE_PATIENT : concerns
+    PV_CASE ||--o{ CASE_REPORTER : reported_by
+    PV_CASE ||--o{ CASE_PRODUCT : involves
+    PV_CASE ||--o{ CASE_EVENT : describes
+    PV_CASE ||--o{ CASE_NARRATIVE : narrated_in
+    PV_CASE ||--o{ SUBMISSION : submitted_via
+    PV_CASE ||--o| WORKFLOW_INSTANCE : lifecycle
+    PRODUCT |o--o{ CASE_PRODUCT : referenced_in
+    BATCH |o--o{ CASE_PRODUCT : referenced_in
+    MEDDRA_TERM |o--o{ CASE_EVENT : coded_as
+    REGULATORY_AUTHORITY ||--o{ SUBMISSION : receives
+    SUBMISSION_FORMAT ||--o{ SUBMISSION : formatted_by
+    DOCUMENT |o--o{ SUBMISSION : output_file

@@ -1,0 +1,17 @@
+// SafeMeds base engine — Prisma schema
+//
+// Translated incrementally from `safemeds-erd.mermaid`, one phase's models
+// at a time (see safemeds-base-engine-build-spec.md). Phase 0 establishes
+// only the datasource/generator and the migration workflow itself; the
+// first domain models (User, Company, ...) land in Phase 1.
+//
+// Naming: @@map to snake_case tables, camelCase in the generated client.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
