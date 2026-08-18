@@ -1,0 +1,48 @@
+import { Processor, WorkerHost } from '@nestjs/bullmq'
+import { Job } from 'bullmq'
+import { Logger } from 'nestjs-pino'
+
+import { MailService } from '../auth/services/mail.service'
+
+export const NOTIFICATION_EMAIL_QUEUE = 'notification-email'
+
+export interface NotificationEmailJob {
+  to: string
+  subject: string
+  bodyText: string
+  actionUrl?: string
+  /** Special Corner SC-7 — drives the branded template's trust-footer line honestly: 'account' for a real SafeMeds user, 'external' for a reporter/distributor/etc. with no account at all. Defaults to 'account' for older enqueued jobs that predate this field. */
+  recipientContext?: 'account' | 'external'
+}
+
+/**
+ * The actual "send it" half of `NotificationsService.create()` — queued
+ * (not sent inline) so a slow/failed Resend call never blocks the
+ * request that created the in-app notification row, and so BullMQ's
+ * built-in retry/backoff covers transient failures without any custom
+ * retry logic here. `MailService.send()` is itself best-effort/never-
+ * throws (see its own doc comment), so a permanent failure here just
+ * logs — the in-app row (the notification itself) is unaffected either
+ * way, it was already committed before this job was even enqueued.
+ */
+@Processor(NOTIFICATION_EMAIL_QUEUE)
+export class NotificationEmailProcessor extends WorkerHost {
+  constructor(
+    private readonly mailService: MailService,
+    private readonly logger: Logger,
+  ) {
+    super()
+  }
+
+  async process(job: Job<NotificationEmailJob>): Promise<void> {
+    const { to, subject, bodyText, actionUrl, recipientContext } = job.data
+    await this.mailService.sendNotification(
+      to,
+      subject,
+      bodyText,
+      actionUrl,
+      recipientContext ?? 'account',
+    )
+    this.logger.log({ to, subject }, 'Notification email processed')
+  }
+}
