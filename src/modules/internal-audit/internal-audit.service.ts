@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { AuditFinding, InternalAudit } from '@prisma/client'
 
 import { newId } from '../../common/id'
@@ -48,6 +48,13 @@ export class InternalAuditService {
     meta: RequestMeta,
   ): Promise<InternalAudit> {
     const companyId = requireCompany(actor)
+    const auditScope = dto.auditScope ?? 'internal'
+    if (auditScope === 'supplier' && !dto.supplierId) {
+      throw new BadRequestException({
+        code: 'SUPPLIER_REQUIRED',
+        message: 'A supplier-scope audit requires the supplier being audited.',
+      })
+    }
 
     return this.rls.runAsCompany(companyId, async (tx) => {
       const created = await tx.internalAudit.create({
@@ -56,6 +63,8 @@ export class InternalAuditService {
           companyId,
           title: dto.title,
           scope: dto.scope ?? null,
+          auditScope,
+          supplierId: auditScope === 'supplier' ? dto.supplierId : null,
           scheduledDate: new Date(dto.scheduledDate),
           leadAuditorUserId: dto.leadAuditorUserId ?? null,
           createdBy: actor.sub,

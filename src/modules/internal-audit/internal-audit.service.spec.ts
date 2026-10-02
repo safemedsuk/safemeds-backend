@@ -118,6 +118,40 @@ describe('InternalAuditService', () => {
         service.create(noCompanyActor, { title: 'x', scheduledDate: '2026-09-01' }, {}),
       ).rejects.toThrow(ForbiddenException)
     })
+
+    it('defaults auditScope to internal, with no supplierId', async () => {
+      const { service } = buildHarness()
+      const audit = await service.create(
+        actor,
+        { title: 'Q3 Internal Audit', scheduledDate: '2026-09-01' },
+        {},
+      )
+      expect(audit.auditScope).toBe('internal')
+      expect(audit.supplierId).toBeNull()
+    })
+
+    it('QualCloud Stage 9 — accepts a real supplier-scope audit with its supplierId', async () => {
+      const { service } = buildHarness()
+      const audit = await service.create(
+        actor,
+        {
+          title: 'API Supplier Audit',
+          scheduledDate: '2026-09-01',
+          auditScope: 'supplier',
+          supplierId: 'supplier-1',
+        },
+        {},
+      )
+      expect(audit.auditScope).toBe('supplier')
+      expect(audit.supplierId).toBe('supplier-1')
+    })
+
+    it('QualCloud Stage 9 — refuses a supplier-scope audit with no supplier named', async () => {
+      const { service } = buildHarness()
+      await expect(
+        service.create(actor, { title: 'x', scheduledDate: '2026-09-01', auditScope: 'supplier' }, {}),
+      ).rejects.toMatchObject({ response: { code: 'SUPPLIER_REQUIRED' } })
+    })
   })
 
   describe('update()', () => {

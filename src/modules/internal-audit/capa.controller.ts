@@ -5,9 +5,11 @@ import type { Request } from 'express'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
-import { PaginationQueryDto } from '../../common/pagination'
 import { CapaService } from './capa.service'
+import { ApproveCapaDto } from './dto/approve-capa.dto'
+import { AssignCapaActionDto } from './dto/assign-capa-action.dto'
 import { CreateCapaDto } from './dto/create-capa.dto'
+import { ListCapasQueryDto } from './dto/list-capas-query.dto'
 import { RecordCapaEffectivenessDto } from './dto/record-capa-effectiveness.dto'
 import { UpdateCapaDto } from './dto/update-capa.dto'
 
@@ -24,7 +26,7 @@ export class CapaController {
 
   @RequirePermissions('quality.view_all')
   @Get()
-  list(@CurrentUser() user: AuthenticatedUser, @Query() query: PaginationQueryDto) {
+  list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListCapasQueryDto) {
     return this.capaService.list(user, query)
   }
 
@@ -60,5 +62,43 @@ export class CapaController {
   @Post(':id/close')
   close(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Req() req: Request) {
     return this.capaService.close(user, id, { ip: req.ip })
+  }
+
+  @RequirePermissions('quality.manage_capa')
+  @Post(':id/action')
+  assignAction(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: AssignCapaActionDto,
+    @Req() req: Request,
+  ) {
+    return this.capaService.assignAction(user, id, dto, { ip: req.ip })
+  }
+
+  @RequirePermissions('quality.close_capa')
+  @Post(':id/approve')
+  approve(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ApproveCapaDto,
+    @Req() req: Request,
+  ) {
+    return this.capaService.approve(user, id, dto, { ip: req.ip })
+  }
+
+  @RequirePermissions('regulatory.manage_registrations')
+  @Post(':id/regulatory-approve')
+  regulatoryApprove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
+    return this.capaService.regulatoryApprove(user, id, { ip: req.ip })
+  }
+
+  @RequirePermissions('quality.manage_capa')
+  @Post(':id/implement')
+  implement(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Req() req: Request) {
+    return this.capaService.implement(user, id, { ip: req.ip })
   }
 }
