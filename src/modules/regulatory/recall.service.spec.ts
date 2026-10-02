@@ -19,6 +19,9 @@ function buildHarness() {
   const instantiate = jest.fn().mockResolvedValue({ id: 'instance-1' })
   const workflowService = { instantiate } as never
 
+  const createFrom = jest.fn().mockResolvedValue({ id: 'capa-new-1' })
+  const capaService = { createFrom } as never
+
   const productFindFirst = jest.fn().mockResolvedValue({ id: 'product-1', companyId: 'company-1' })
   const capaFindFirst = jest.fn().mockResolvedValue({ id: 'capa-1', companyId: 'company-1' })
 
@@ -28,7 +31,9 @@ function buildHarness() {
     productId: 'product-1',
     reason: 'Contamination detected',
     recallClass: null,
-    status: 'reported',
+    status: 'draft',
+    ref: 'REC-2026-0001',
+    mode: 'real',
     rootCauseCapaId: null,
   }
   const recallCreate = jest.fn().mockResolvedValue(row)
@@ -42,6 +47,8 @@ function buildHarness() {
 
   const workflowInstanceFindFirst = jest.fn().mockResolvedValue(null)
 
+  const recallUpdate = jest.fn().mockResolvedValue({ ...row, rootCauseCapaId: 'capa-new-1' })
+
   const tables = {
     product: { findFirst: productFindFirst },
     capa: { findFirst: capaFindFirst },
@@ -50,6 +57,7 @@ function buildHarness() {
       findFirst: recallFindFirst,
       findMany: recallFindMany,
       count: recallCount,
+      update: recallUpdate,
     },
     recallCase: {
       findUnique: recallCaseFindUnique,
@@ -62,22 +70,46 @@ function buildHarness() {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
   }
 
-  const service = new RecallService(rls as never, auditService, workflowService)
+  const service = new RecallService(rls as never, auditService, workflowService, capaService)
   return {
     service,
     auditLog,
     instantiate,
+    createFrom,
     productFindFirst,
     capaFindFirst,
     recallCreate,
     recallFindFirst,
+    recallFindMany,
     recallCaseFindUnique,
     recallCaseCreate,
+    recallUpdate,
   }
 }
 
+describe('RecallService.list', () => {
+  it('QualCloud Stage 10.7 — filters by mode when given, letting the frontend reuse this list for the Mock Recalls screen', async () => {
+    const { service, recallFindMany } = buildHarness()
+
+    await service.list(actor, { mode: 'mock', page: 1, limit: 25 })
+
+    expect(recallFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ mode: 'mock' }) }),
+    )
+  })
+
+  it('omits the mode filter entirely when not given, listing both real and mock recalls together', async () => {
+    const { service, recallFindMany } = buildHarness()
+
+    await service.list(actor, { page: 1, limit: 25 })
+
+    const where = recallFindMany.mock.calls[0][0].where as Record<string, unknown>
+    expect(where).not.toHaveProperty('mode')
+  })
+})
+
 describe('RecallService.create', () => {
-  it('creates a reported recall and instantiates its workflow with no country', async () => {
+  it('creates a draft recall (with a real ref/mode) and instantiates its workflow with no country', async () => {
     const { service, recallCreate, instantiate, auditLog } = buildHarness()
 
     await service.create(actor, { productId: 'product-1', reason: 'Contamination detected' }, {})
@@ -87,7 +119,9 @@ describe('RecallService.create', () => {
         data: expect.objectContaining({
           productId: 'product-1',
           reason: 'Contamination detected',
-          status: 'reported',
+          status: 'draft',
+          mode: 'real',
+          ref: expect.stringMatching(/^REC-\d{4}-\d{4}$/),
           initiatedBy: 'user-1',
         }),
       }),
@@ -96,6 +130,25 @@ describe('RecallService.create', () => {
     expect(auditLog).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ action: 'recall_created' }),
+    )
+  })
+
+  it('mints a MOCK-prefixed ref for a drill recall', async () => {
+    const { service, recallCreate } = buildHarness()
+
+    await service.create(
+      actor,
+      { productId: 'product-1', reason: 'Drill', mode: 'mock' },
+      {},
+    )
+
+    expect(recallCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          mode: 'mock',
+          ref: expect.stringMatching(/^MOCK-\d{4}-\d{3}$/),
+        }),
+      }),
     )
   })
 
@@ -179,5 +232,54 @@ describe('RecallService.linkCases', () => {
     await expect(service.linkCases(actor, 'other-co-recall', ['case-1'], {})).rejects.toMatchObject(
       { response: { code: 'NOT_FOUND' } },
     )
+  })
+})
+
+describe('RecallService.openInvestigationCapa', () => {
+  it('opens a real CAPA with sourceRecordType recall_investigation and backfills rootCauseCapaId when unset', async () => {
+    const { service, createFrom, recallUpdate } = buildHarness()
+
+    await service.openInvestigationCapa(
+      actor,
+      'recall-1',
+      { title: 'Root cause of contamination', correctiveAction: 'Retrain line staff' },
+      {},
+    )
+
+    expect(createFrom).toHaveBeenCalledWith(
+      expect.anything(),
+      actor,
+      'company-1',
+      'recall_investigation',
+      'recall-1',
+      expect.objectContaining({ title: 'Root cause of contamination', correctiveAction: 'Retrain line staff' }),
+      {},
+    )
+    expect(recallUpdate).toHaveBeenCalledWith({
+      where: { id: 'recall-1' },
+      data: { rootCauseCapaId: 'capa-new-1' },
+    })
+  })
+
+  it('never overwrites an already-set rootCauseCapaId', async () => {
+    const { service, recallFindFirst, recallUpdate } = buildHarness()
+    recallFindFirst.mockResolvedValue({
+      id: 'recall-1',
+      companyId: 'company-1',
+      rootCauseCapaId: 'existing-capa',
+    })
+
+    await service.openInvestigationCapa(actor, 'recall-1', { title: 'x', correctiveAction: 'y' }, {})
+
+    expect(recallUpdate).not.toHaveBeenCalled()
+  })
+
+  it('404s for a recall in another company', async () => {
+    const { service, recallFindFirst } = buildHarness()
+    recallFindFirst.mockResolvedValueOnce(null)
+
+    await expect(
+      service.openInvestigationCapa(actor, 'other-co-recall', { title: 'x', correctiveAction: 'y' }, {}),
+    ).rejects.toMatchObject({ response: { code: 'NOT_FOUND' } })
   })
 })

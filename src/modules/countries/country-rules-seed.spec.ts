@@ -134,7 +134,8 @@ describe('country-rules seed data consistency', () => {
   })
 
   it('every authority references a country ISO in the 8-market build-spec list', () => {
-    const validIsos = new Set(['KE', 'UG', 'TZ', 'RW', 'ET', 'NG', 'ZA', 'GH'])
+    // 'ZW' added QualCloud Stage 10.9 — Zimbabwe/MCAZ, seeded specifically for real recall-rule content.
+    const validIsos = new Set(['KE', 'UG', 'TZ', 'RW', 'ET', 'NG', 'ZA', 'GH', 'ZW'])
     for (const authority of AUTHORITIES) {
       expect(validIsos.has(authority.countryIso)).toBe(true)
     }

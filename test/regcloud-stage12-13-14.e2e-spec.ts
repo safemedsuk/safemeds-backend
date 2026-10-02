@@ -63,6 +63,13 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
       'regulatory.submit',
       'regulatory.manage_promotional_material',
       'regulatory.manage_recalls',
+      // QualCloud Stage 10.8's own RBAC correction — `Recall` creation/
+      // linking now goes through `quality.log_recall`
+      // (RECALL.CREATE/EDIT -> QUALITY_ASSOCIATE/QUALITY_MANAGER, also
+      // preserved on this role); `regulatory.manage_recalls` above is
+      // now scoped narrowly to the regulator-submission actions this
+      // file doesn't exercise.
+      'quality.log_recall',
       'regulatory.manage_import_export',
       'pv.manage_clinical_trials',
       'pv.view_all',
@@ -109,10 +116,25 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
       ],
     })
 
-    // Stage 14's `recall` workflow (5 states, 4 transitions).
+    // QualCloud (Phase 13) Stage 10.2's real 9-state `recall` workflow
+    // (superseding the original 5-state `reported → investigating →
+    // notified_to_authority → in_progress → closed` sequence this
+    // fixture used to mirror) — `draft → under_assessment → approved →
+    // notification → execution → reconciliation → closure_pending →
+    // closed`, plus `draft/under_assessment → cancelled`.
     const recallDefId = randomUUID()
     await testPrisma.workflowDefinition.create({ data: { id: recallDefId, recordType: 'recall', reportTypeId: null, countryId: null, version: 1, status: 'active' } })
-    const recallStateKeys = ['reported', 'investigating', 'notified_to_authority', 'in_progress', 'closed']
+    const recallStateKeys = [
+      'draft',
+      'under_assessment',
+      'approved',
+      'notification',
+      'execution',
+      'reconciliation',
+      'closure_pending',
+      'closed',
+      'cancelled',
+    ]
     const recallStateIds = new Map<string, string>()
     await testPrisma.workflowState.createMany({
       data: recallStateKeys.map((key, idx) => ({
@@ -121,14 +143,20 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
         stateKey: key,
         name: key,
         isInitial: idx === 0,
-        isTerminal: key === 'closed',
+        isTerminal: key === 'closed' || key === 'cancelled',
       })),
     })
     const recallTransitions: { from: string; to: string; requiresSignature: boolean }[] = [
-      { from: 'reported', to: 'investigating', requiresSignature: false },
-      { from: 'investigating', to: 'notified_to_authority', requiresSignature: false },
-      { from: 'notified_to_authority', to: 'in_progress', requiresSignature: false },
-      { from: 'in_progress', to: 'closed', requiresSignature: true },
+      { from: 'draft', to: 'under_assessment', requiresSignature: false },
+      { from: 'draft', to: 'cancelled', requiresSignature: false },
+      { from: 'under_assessment', to: 'cancelled', requiresSignature: false },
+      { from: 'under_assessment', to: 'approved', requiresSignature: true },
+      { from: 'approved', to: 'notification', requiresSignature: false },
+      { from: 'notification', to: 'execution', requiresSignature: false },
+      { from: 'execution', to: 'reconciliation', requiresSignature: false },
+      { from: 'reconciliation', to: 'closure_pending', requiresSignature: false },
+      { from: 'closure_pending', to: 'execution', requiresSignature: false },
+      { from: 'closure_pending', to: 'closed', requiresSignature: true },
     ]
     await testPrisma.workflowTransition.createMany({
       data: recallTransitions.map((t) => ({
@@ -154,9 +182,26 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
   }
 
   describe('Stage 12 — Clinical Trials Regulatory Route (reuse, not rebuild)', () => {
+    /** Real-usage request, 22 Sep 2026 (items 19/20) — `POST /pv/clinical-trials` now requires both approval documents. */
     async function createTrial(): Promise<string> {
+      const regulatoryApprovalDocumentId = randomUUID()
+      const ethicsApprovalDocumentId = randomUUID()
+      await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        await tx.document.create({ data: { id: regulatoryApprovalDocumentId, companyId, recordType: 'clinical_trial', recordId: companyId, title: 'Regulatory approval', createdBy: raOfficer.userId } })
+        await tx.document.create({ data: { id: ethicsApprovalDocumentId, companyId, recordType: 'clinical_trial', recordId: companyId, title: 'Ethics approval', createdBy: raOfficer.userId } })
+      })
       const trial = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), raOfficer)
-        .send({ trialReference: `NCT-STG12-${randomUUID().slice(0, 8)}`, trialName: 'A Study of Amoxiclav', countryId, startDate: '2025-01-01' })
+        .send({
+          trialReference: `NCT-STG12-${randomUUID().slice(0, 8)}`,
+          trialName: 'A Study of Amoxiclav',
+          countryId,
+          startDate: '2025-01-01',
+          regulatoryApprovalDocumentId,
+          regulatoryApprovalDate: '2025-01-01',
+          ethicsApprovalDocumentId,
+          ethicsApprovalDate: '2025-01-01',
+        })
         .expect(201)
       return trial.body.data.id as string
     }
@@ -327,23 +372,79 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
       })
     }
 
-    it('walks a recall from Reported through to a signed Closed, stamping authorityNotifiedAt along the way', async () => {
+    it('walks a recall through the real QualCloud Stage 10.2 lifecycle to a signed Closed, blocked on approval until scope+risk exist', async () => {
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/recalls'), raOfficer)
         .send({ productId, reason: 'Contamination detected in batch 2026-04', recallClass: 'Class II' })
         .expect(201)
       const recallId = created.body.data.id as string
       const workflowInstanceId = created.body.data.workflowInstanceId as string
-      expect(created.body.data.status).toBe('reported')
-      expect(created.body.data.authorityNotifiedAt).toBeNull()
+      expect(created.body.data.status).toBe('draft')
+      expect(created.body.data.mode).toBe('real')
+      expect(created.body.data.ref).toMatch(/^REC-\d{4}-\d{4}$/)
 
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'investigating' }).expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'notified_to_authority' }).expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'under_assessment' })
+        .expect(201)
 
-      const notified = await authed(request(httpServer(app)).get(`/api/v1/recalls/${recallId}`), raOfficer).expect(200)
-      expect(notified.body.data.status).toBe('notified_to_authority')
-      expect(notified.body.data.authorityNotifiedAt).toBeTruthy()
+      // Blocked — no frozen scope version and no risk assessment yet
+      // (`RecallWorkflowGuards`'s real approval gate).
+      const blocked = await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'approved', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approve this recall.' })
+        .expect(409)
+      expect(blocked.body.error.message).toMatch(/freeze a product\/batch scope/i)
 
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'in_progress' }).expect(201)
+      const batchId = randomUUID()
+      const scopeVersionId = randomUUID()
+      const riskAssessmentId = randomUUID()
+      await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        await tx.batch.create({
+          data: { id: batchId, companyId, productId, batchNumber: 'B2026-04', manufacturedOn: new Date('2026-04-01'), expiresOn: new Date('2028-04-01') },
+        })
+        await tx.recallScopeVersion.create({
+          data: { id: scopeVersionId, companyId, recallId, version: 1, status: 'frozen', approvedBy: raOfficer.userId, approvedAt: new Date() },
+        })
+        await tx.recallScopeItem.create({ data: { id: randomUUID(), scopeVersionId, productId, batchId, batchSize: 10_000 } })
+        await tx.riskAssessment.create({
+          data: { id: riskAssessmentId, companyId, sourceRecordType: 'recall', sourceRecordId: recallId, title: 'Contamination risk', severity: 4, probability: 3, score: 12, riskLevel: 'high', createdBy: raOfficer.userId },
+        })
+      })
+
+      // Still blocked with no risk-assessment-only fixture removed —
+      // now both prerequisites are on record, so approval succeeds.
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'approved', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approve this recall.' })
+        .expect(201)
+
+      const approved = await authed(request(httpServer(app)).get(`/api/v1/recalls/${recallId}`), raOfficer).expect(200)
+      expect(approved.body.data.status).toBe('approved')
+
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'notification' }).expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'execution' }).expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'reconciliation' }).expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'closure_pending' }).expect(201)
+
+      // Stage 10.6's own real 8-gate closure check — with no country
+      // added at all, gate 8 alone would block closure regardless of
+      // anything else; satisfy it (and gate 6, the linked
+      // recall-investigation CAPA) directly, the same
+      // bypass_rls-fixture-row pattern this file already uses above.
+      await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        await tx.recallCountry.create({
+          data: { id: randomUUID(), companyId, recallId, countryId, status: 'closure_submitted' },
+        })
+        await tx.capa.create({
+          data: {
+            id: randomUUID(),
+            companyId,
+            sourceRecordType: 'recall_investigation',
+            sourceRecordId: recallId,
+            title: 'Root cause of contamination',
+            correctiveAction: 'Retrain line staff',
+          },
+        })
+      })
 
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
         .send({ toStateKey: 'closed', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Close this recall — corrective action complete.' })
@@ -351,7 +452,24 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
 
       const closed = await authed(request(httpServer(app)).get(`/api/v1/recalls/${recallId}`), raOfficer).expect(200)
       expect(closed.body.data.status).toBe('closed')
-      expect(closed.body.data.transitionHistory).toHaveLength(4)
+      expect(closed.body.data.closedAt).toBeTruthy()
+      expect(closed.body.data.transitionHistory).toHaveLength(7)
+    })
+
+    it('requires a real reason to cancel a recall from draft', async () => {
+      const created = await authedWrite(request(httpServer(app)).post('/api/v1/recalls'), raOfficer)
+        .send({ productId, reason: 'False alarm under investigation' })
+        .expect(201)
+      const workflowInstanceId = created.body.data.workflowInstanceId as string
+
+      const blocked = await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'cancelled' })
+        .expect(409)
+      expect(blocked.body.error.message).toMatch(/reason is required to cancel/i)
+
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'cancelled', note: 'Confirmed false alarm — no genuine defect found.' })
+        .expect(201)
     })
 
     it('links a real PV case to a recall as evidence, via a plain FK/lookup link, at creation time and afterward', async () => {
@@ -397,24 +515,76 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
       await authedWrite(request(httpServer(app)).post('/api/v1/recalls'), raOfficer).send({ productId, reason: 'x', rootCauseCapaId: otherCapaId }).expect(404)
     })
 
-    it('blocks Closed until a real reason is on record (data-integrity backstop)', async () => {
+    it('blocks Closed until the real 8-gate closure check passes (Stage 10.6), naming every failed gate, then succeeds once every gate clears', async () => {
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/recalls'), raOfficer).send({ productId, reason: 'Contamination' }).expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${created.body.data.workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'investigating' })
+      const recallId = created.body.data.id as string
+      const workflowInstanceId = created.body.data.workflowInstanceId as string
+
+      const batchId = randomUUID()
+      await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        await tx.batch.create({
+          data: { id: batchId, companyId, productId, batchNumber: 'B2026-05', manufacturedOn: new Date('2026-05-01'), expiresOn: new Date('2028-05-01') },
+        })
+        const scopeVersionId = randomUUID()
+        await tx.recallScopeVersion.create({
+          data: { id: scopeVersionId, companyId, recallId, version: 1, status: 'frozen', approvedBy: raOfficer.userId, approvedAt: new Date() },
+        })
+        await tx.recallScopeItem.create({ data: { id: randomUUID(), scopeVersionId, productId, batchId, batchSize: 500 } })
+        await tx.riskAssessment.create({
+          data: { id: randomUUID(), companyId, sourceRecordType: 'recall', sourceRecordId: recallId, title: 'Contamination risk', severity: 3, probability: 3, score: 9, riskLevel: 'medium', createdBy: raOfficer.userId },
+        })
+      })
+
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'under_assessment' })
         .expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${created.body.data.workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'notified_to_authority' })
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'approved', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approve.' })
         .expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${created.body.data.workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'in_progress' })
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'notification' })
+        .expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'execution' })
+        .expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'reconciliation' })
+        .expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'closure_pending' })
         .expect(201)
 
-      // A reason was set at creation and can never be cleared through this
-      // API, so this proves the guard's positive path fires cleanly; the
-      // guard itself is exercised directly (empty-reason branch) in the
-      // service's own unit spec, where the row can be forced into that
-      // state without going through validation.
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${created.body.data.workflowInstanceId}/transition`), raOfficer)
+      // Blocked — no country has reached closure_submitted (Gate 8) and
+      // no recall-investigation CAPA is linked (Gate 6). Every failed
+      // gate is named explicitly, never a bare "cannot close."
+      const blocked = await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'closed', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Close.' })
+        .expect(409)
+      expect(blocked.body.error.message).toMatch(/Gate 8 \(Closure recorded with every country\)/)
+      expect(blocked.body.error.message).toMatch(/Gate 6 \(A recall-investigation CAPA is linked\)/)
+
+      await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        await tx.recallCountry.create({
+          data: { id: randomUUID(), companyId, recallId, countryId, status: 'closure_submitted' },
+        })
+        await tx.capa.create({
+          data: {
+            id: randomUUID(),
+            companyId,
+            sourceRecordType: 'recall_investigation',
+            sourceRecordId: recallId,
+            title: 'Root cause',
+            correctiveAction: 'Fix it',
+          },
+        })
+      })
+
+      // Every gate clears — the recall's own reason (set at creation
+      // and never clearable through this API) plays no direct role in
+      // this check anymore, unlike the old, now-superseded backstop.
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
         .send({ toStateKey: 'closed', signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Close.' })
         .expect(201)
     })
@@ -423,7 +593,7 @@ describe('RegCloud Stages 12–14 — Clinical Trial Route / Promotional Materia
       await authedWrite(request(httpServer(app)).post('/api/v1/recalls'), raOfficer).send({ productId: randomUUID(), reason: 'x' }).expect(404)
     })
 
-    it('RBAC — regulatory.manage_recalls is required to create a recall', async () => {
+    it('RBAC — a real permission is required to create a recall', async () => {
       const noPermRole = 'EXECUTIVE_READONLY'
       await testPrisma.role.create({ data: { id: randomUUID(), key: noPermRole, name: 'Read Only', description: 'test fixture', isPlatform: false } })
       const readonlyActor = await createAuthenticatedActor(app, testPrisma, { companyId, roleKeys: [noPermRole] })

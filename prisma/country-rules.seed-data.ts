@@ -100,6 +100,8 @@ export const AUTHORITIES: AuthoritySeed[] = [
   },
   { countryIso: 'ZA', code: 'SAHPRA', name: 'South African Health Products Regulatory Authority' },
   { countryIso: 'GH', code: 'GhFDA', name: 'Ghana Food and Drugs Authority' },
+  /** QualCloud (Phase 13) Stage 10.9 — Zimbabwe's own recall-quarantine authority (Country Rules Content Pack, 2015 procedure), added specifically so `RecallRuleSet`/`RecallRule` seeding has a real authority row to attach to. */
+  { countryIso: 'ZW', code: 'MCAZ', name: 'Medicines Control Authority of Zimbabwe' },
 ]
 
 /** `moduleKey` is explicit here (not just relying on the schema default) so the catalog itself documents which domain module each report type belongs to — all six are PV today; `qualcloud`/`regcloud` will add their own entries with their own moduleKey once those modules exist. */

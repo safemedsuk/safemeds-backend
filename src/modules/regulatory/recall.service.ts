@@ -1,14 +1,17 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma, Recall } from '@prisma/client'
+import { Capa, Prisma, Recall } from '@prisma/client'
 
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { paginate, PaginatedResult } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import { CapaService } from '../internal-audit/capa.service'
 import { WorkflowService } from '../workflow/workflow.service'
 import { CreateRecallDto } from './dto/create-recall.dto'
 import { ListRecallsQueryDto } from './dto/list-recalls-query.dto'
+import { OpenRecallInvestigationCapaDto } from './dto/open-recall-investigation-capa.dto'
+import { RECALL_INVESTIGATION_CAPA_SOURCE_TYPE } from './recall-closure-gate.service'
 
 export interface RequestMeta {
   ip?: string
@@ -55,6 +58,25 @@ function requireCompany(actor: AuthenticatedUser): string {
 }
 
 /**
+ * QualCloud (Phase 13) Stage 10.2 — `REC-YYYY-NNNN` for a real recall,
+ * `MOCK-YYYY-NNN` for a drill (10.7) — same generator precedent as
+ * `RegVariation.displayCode`/`Deviation.deviationNumber`.
+ */
+async function nextRecallRef(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  mode: string,
+): Promise<string> {
+  const year = new Date().getUTCFullYear()
+  const prefix = mode === 'mock' ? 'MOCK' : 'REC'
+  const width = mode === 'mock' ? 3 : 4
+  const count = await tx.recall.count({
+    where: { companyId, ref: { startsWith: `${prefix}-${year}-` } },
+  })
+  return `${prefix}-${year}-${String(count + 1).padStart(width, '0')}`
+}
+
+/**
  * RegCloud (Phase 12) Stage 14 — Post-Market & Recall. RegCloud's own
  * honest slice of a genuinely three-module event (per `todo-regcloud.md`'s
  * Reconciliation Note 5): the regulator-facing half lives here. Cross-
@@ -73,6 +95,7 @@ export class RecallService {
     private readonly rls: RlsService,
     private readonly auditService: AuditService,
     private readonly workflowService: WorkflowService,
+    private readonly capaService: CapaService,
   ) {}
 
   async list(
@@ -85,6 +108,7 @@ export class RecallService {
         companyId,
         ...(query.productId ? { productId: query.productId } : {}),
         ...(query.status ? { status: query.status } : {}),
+        ...(query.mode ? { mode: query.mode } : {}),
       }
       const [rows, total] = await Promise.all([
         tx.recall.findMany({
@@ -166,6 +190,8 @@ export class RecallService {
         if (!capa) throw new NotFoundException({ code: 'NOT_FOUND', message: 'CAPA not found' })
       }
 
+      const mode = dto.mode ?? 'real'
+      const ref = await nextRecallRef(tx, companyId, mode)
       const created = await tx.recall.create({
         data: {
           id: newId(),
@@ -174,7 +200,15 @@ export class RecallService {
           reason: dto.reason,
           recallClass: dto.recallClass,
           rootCauseCapaId: dto.rootCauseCapaId,
-          status: 'reported',
+          status: 'draft',
+          ref,
+          mode,
+          type: dto.type,
+          level: dto.level,
+          reasonCategory: dto.reasonCategory,
+          triggerSourceType: dto.triggerSourceType,
+          triggerSourceId: dto.triggerSourceId,
+          openedAt: new Date(),
           initiatedBy: actor.sub,
           createdBy: actor.sub,
         },
@@ -238,6 +272,50 @@ export class RecallService {
     })
 
     return this.get(actor, id)
+  }
+
+  /**
+   * QualCloud (Phase 13) Stage 10.6 — Closure Gate #6: "a CAPA is
+   * linked" (Reconciliation Note 4's own fork resolution —
+   * `sourceRecordType: 'recall_investigation'`). Also backfills the
+   * pre-existing (RegCloud Stage 14) `Recall.rootCauseCapaId` pointer
+   * when it isn't already set, so both hooks this schema carries for
+   * "which CAPA explains this recall" always agree.
+   */
+  async openInvestigationCapa(
+    actor: AuthenticatedUser,
+    recallId: string,
+    dto: OpenRecallInvestigationCapaDto,
+    meta: RequestMeta,
+  ): Promise<Capa> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const recall = await tx.recall.findFirst({ where: { id: recallId, companyId } })
+      if (!recall) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Recall not found' })
+
+      const capa = await this.capaService.createFrom(
+        tx,
+        actor,
+        companyId,
+        RECALL_INVESTIGATION_CAPA_SOURCE_TYPE,
+        recallId,
+        {
+          title: dto.title,
+          correctiveAction: dto.correctiveAction,
+          preventiveAction: dto.preventiveAction,
+          rootCauseCategory: dto.rootCauseCategory,
+          ownerUserId: dto.ownerUserId,
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        },
+        meta,
+      )
+
+      if (!recall.rootCauseCapaId) {
+        await tx.recall.update({ where: { id: recallId }, data: { rootCauseCapaId: capa.id } })
+      }
+
+      return capa
+    })
   }
 
   private async linkCasesInTx(

@@ -81,6 +81,8 @@ export class CompanyProfileService {
         data: {
           name: dto.name ?? existing.name,
           engagementType: dto.engagementType ?? existing.engagementType,
+          regulatoryContactEmail: dto.regulatoryContactEmail ?? existing.regulatoryContactEmail,
+          mockRecallCadenceMonths: dto.mockRecallCadenceMonths ?? existing.mockRecallCadenceMonths,
         },
       })
       const diff = diffForAudit(existing, updated)

@@ -168,4 +168,35 @@ describe('CompanyProfileService — Stage 3.2 public reporting + Stage 3.3/3.4 c
       )
     })
   })
+
+  describe('update() — testing-correction-explanation.md decision #4', () => {
+    it('sets regulatoryContactEmail, previously a genuinely write-never field on this endpoint', async () => {
+      const { service, companies } = buildHarness()
+
+      const updated = await service.update(
+        actor,
+        { regulatoryContactEmail: 'compliance@fankammeds.example' },
+        {},
+      )
+
+      expect(updated.regulatoryContactEmail).toBe('compliance@fankammeds.example')
+      expect(companies.get('company-1')!.regulatoryContactEmail).toBe(
+        'compliance@fankammeds.example',
+      )
+    })
+
+    it('leaves regulatoryContactEmail untouched when omitted from the update', async () => {
+      const { service, companies } = buildHarness()
+      companies.set('company-1', {
+        ...companies.get('company-1')!,
+        regulatoryContactEmail: 'already-set@fankammeds.example',
+      })
+
+      await service.update(actor, { name: 'FankamMeds Renamed Inc' }, {})
+
+      expect(companies.get('company-1')!.regulatoryContactEmail).toBe(
+        'already-set@fankammeds.example',
+      )
+    })
+  })
 })

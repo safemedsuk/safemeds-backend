@@ -195,6 +195,24 @@ export const REG_REGISTRATION_WORKFLOW_STATES = [
   { key: 'planning', name: 'Planning', isInitial: true, isTerminal: false },
   { key: 'compiling', name: 'Compiling Dossier', isInitial: false, isTerminal: false },
   { key: 'completeness_check', name: 'Completeness Check', isInitial: false, isTerminal: false },
+  /**
+   * testing-correction-explanation.md §2.2 — a non-renewal variation's own
+   * entry point, never reachable via a normal role-gated transition (no
+   * `to: 'variation_application'` transition is seeded below) — only
+   * `RegVariationService.create()`'s own system-owned fast-forward, right
+   * after instantiation, ever puts a dossier here. `isInitial: false`
+   * deliberately: this workflow's one seeded initial state stays
+   * `planning`, matching every other dossier kind this same definition
+   * serves (fresh registration, CTA, reliance).
+   */
+  {
+    key: 'variation_application',
+    name: 'Variation Application',
+    isInitial: false,
+    isTerminal: false,
+  },
+  /** testing-correction-explanation.md §3.1 — a renewal's own entry point, same "system fast-forward only" rule as `variation_application` above. */
+  { key: 'renewal_requested', name: 'Renewal Requested', isInitial: false, isTerminal: false },
   { key: 'submitted', name: 'Submitted', isInitial: false, isTerminal: false },
   { key: 'query_received', name: 'Query Received', isInitial: false, isTerminal: false },
   { key: 'responding', name: 'Responding', isInitial: false, isTerminal: false },
@@ -231,6 +249,25 @@ export const REG_REGISTRATION_WORKFLOW_TRANSITIONS: {
   // Stage 4 — blocked until a `RegSubmission` has real dispatch evidence attached.
   {
     from: 'completeness_check',
+    to: 'submitted',
+    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
+    requiresSignature: false,
+  },
+  // testing-correction-explanation.md §2.2 — blocked until the 3 documents
+  // required at Variation Application (proof of payment, PPB invoice,
+  // ≥1 accompanying-change document) are all present.
+  {
+    from: 'variation_application',
+    to: 'submitted',
+    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
+    requiresSignature: false,
+  },
+  // testing-correction-explanation.md §3.1 — reuses the exact same
+  // dispatch-evidence gate `completeness_check → submitted` already has;
+  // a renewal never sees a document checklist gate, just Generate
+  // Submission + Attach Evidence, same as every other dossier from here on.
+  {
+    from: 'renewal_requested',
     to: 'submitted',
     requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
     requiresSignature: false,
@@ -347,17 +384,33 @@ export const PROMOTIONAL_MATERIAL_WORKFLOW_TRANSITIONS: {
  */
 export const RECALL_WORKFLOW_RECORD_TYPE = 'recall'
 
+/**
+ * QualCloud (Phase 13) Stage 10.2 — the real 8-state lifecycle per the
+ * Product Build Package's own case-lifecycle diagram, superseding the
+ * original 5-state `reported → investigating → notified_to_authority →
+ * in_progress → closed` sequence above (kept as a comment for history,
+ * not as a second definition) — `seedWorkflowDefinition()`'s own
+ * re-point-don't-delete safeguard only ever re-points an instance onto
+ * a new state sharing the exact same `stateKey` (it does no semantic
+ * remapping) — verified against the real dev database before this
+ * migration: the one real pre-existing `Recall` workflow instance was
+ * already sitting in `closed`, which exists unchanged in both the old
+ * and new definitions, so it's preserved automatically. Had any real
+ * instance existed in one of the four states this rewrite removes
+ * (`reported`/`investigating`/`notified_to_authority`/`in_progress`),
+ * the safeguard's own loud `console.warn` would have named it rather
+ * than silently dropping it.
+ */
 export const RECALL_WORKFLOW_STATES = [
-  { key: 'reported', name: 'Reported', isInitial: true, isTerminal: false },
-  { key: 'investigating', name: 'Investigating', isInitial: false, isTerminal: false },
-  {
-    key: 'notified_to_authority',
-    name: 'Notified to Authority',
-    isInitial: false,
-    isTerminal: false,
-  },
-  { key: 'in_progress', name: 'In Progress', isInitial: false, isTerminal: false },
+  { key: 'draft', name: 'Draft', isInitial: true, isTerminal: false },
+  { key: 'under_assessment', name: 'Under Assessment', isInitial: false, isTerminal: false },
+  { key: 'approved', name: 'Approved', isInitial: false, isTerminal: false },
+  { key: 'notification', name: 'Notification', isInitial: false, isTerminal: false },
+  { key: 'execution', name: 'Execution', isInitial: false, isTerminal: false },
+  { key: 'reconciliation', name: 'Reconciliation', isInitial: false, isTerminal: false },
+  { key: 'closure_pending', name: 'Closure Pending', isInitial: false, isTerminal: false },
   { key: 'closed', name: 'Closed', isInitial: false, isTerminal: true },
+  { key: 'cancelled', name: 'Cancelled', isInitial: false, isTerminal: true },
 ] as const
 
 export const RECALL_WORKFLOW_TRANSITIONS: {
@@ -366,32 +419,23 @@ export const RECALL_WORKFLOW_TRANSITIONS: {
   requiredRoleKey: string
   requiresSignature: boolean
 }[] = [
-  {
-    from: 'reported',
-    to: 'investigating',
-    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
-    requiresSignature: false,
-  },
-  // `RecallWorkflowGuards`' own status-sync sets `authorityNotifiedAt` the moment this transition fires.
-  {
-    from: 'investigating',
-    to: 'notified_to_authority',
-    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
-    requiresSignature: false,
-  },
-  {
-    from: 'notified_to_authority',
-    to: 'in_progress',
-    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
-    requiresSignature: false,
-  },
-  // Closing out a recall is a real compliance decision — signature-gated, matching the project's own "the significant terminal action gets a signature" precedent (registration approval, CAPA effectiveness closure).
-  {
-    from: 'in_progress',
-    to: 'closed',
-    requiredRoleKey: 'REGULATORY_AFFAIRS_OFFICER',
-    requiresSignature: true,
-  },
+  { from: 'draft', to: 'under_assessment', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  { from: 'draft', to: 'cancelled', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  { from: 'under_assessment', to: 'cancelled', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  // The real recall decision — a genuine compliance/business decision — is e-signature-gated, matching `RISK.APPROVE`/`RECALL.APPROVE` → QUALITY_MANAGER (10.8).
+  { from: 'under_assessment', to: 'approved', requiredRoleKey: 'QUALITY_MANAGER', requiresSignature: true },
+  { from: 'approved', to: 'notification', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  { from: 'notification', to: 'execution', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  { from: 'execution', to: 'reconciliation', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  { from: 'reconciliation', to: 'closure_pending', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  // A failed gate or a regulator returning a report sends it back, not forward.
+  { from: 'closure_pending', to: 'execution', requiredRoleKey: 'QUALITY_ASSOCIATE', requiresSignature: false },
+  // Full closure — the real 8-gate check (Stage 10.6) is a later stage;
+  // this transition is deliberately still signature-gated as the real
+  // compliance terminal action, matching this project's own "the
+  // significant terminal action gets a signature" precedent, with the
+  // full gate-by-gate enforcement left for that future pass.
+  { from: 'closure_pending', to: 'closed', requiredRoleKey: 'QUALITY_MANAGER', requiresSignature: true },
 ]
 
 /**
@@ -436,4 +480,262 @@ export const PERIODIC_REPORT_WORKFLOW_TRANSITIONS: {
     requiresSignature: false,
   },
   { from: 'qc_reviewed', to: 'submitted', requiredRoleKey: 'QPPV', requiresSignature: true },
+]
+
+/**
+ * QualCloud (Phase 13) Stage 1 — Document Control. The real
+ * Draft→Review&Approve→Effective→(Superseded|Retired) lifecycle
+ * `Sop.status`'s own schema doc comment (Stage 0) already named and
+ * explicitly deferred to this stage. `QUALITY_ASSOCIATE` drafts and
+ * submits; `QUALITY_MANAGER` is the independent second approver —
+ * never the same person who authored the document, matching this
+ * project's own established "the author cannot also be the sole
+ * approver" GMP control (enforced by `QualityWorkflowGuards`, not by
+ * this seed data). Signature-gated only on `approved` — the one real
+ * GMP approval-signature moment; `effective`/`retired` are plain
+ * role-gated transitions (the e-signature already happened at
+ * approval, re-signing to merely *activate* an already-approved
+ * document adds no real control). Read & Understand is deliberately
+ * NOT a workflow state (see the guard file's own doc comment for why
+ * a document going effective must never wait on being read) — it is
+ * a separate `DocumentAcknowledgment` tracking mechanism layered on
+ * top of the `effective` state.
+ */
+export const QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_RECORD_TYPE = 'quality_controlled_document'
+
+export const QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_STATES = [
+  { key: 'draft', name: 'Draft', isInitial: true, isTerminal: false },
+  { key: 'in_review', name: 'In Review', isInitial: false, isTerminal: false },
+  { key: 'approved', name: 'Approved', isInitial: false, isTerminal: false },
+  { key: 'effective', name: 'Effective', isInitial: false, isTerminal: false },
+  { key: 'superseded', name: 'Superseded', isInitial: false, isTerminal: true },
+  { key: 'retired', name: 'Retired', isInitial: false, isTerminal: true },
+] as const
+
+export const QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_TRANSITIONS: {
+  from: string
+  to: string
+  requiredRoleKey: string
+  requiresSignature: boolean
+}[] = [
+  {
+    from: 'draft',
+    to: 'in_review',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  // Reject — back to draft for rework, no signature (rejecting isn't the
+  // self-certification risk approving is, same precedent this project
+  // already established for PV case Narrative→Medical Review).
+  {
+    from: 'in_review',
+    to: 'draft',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: false,
+  },
+  {
+    from: 'in_review',
+    to: 'approved',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
+  {
+    from: 'approved',
+    to: 'effective',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: false,
+  },
+  {
+    from: 'effective',
+    to: 'retired',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: false,
+  },
+]
+
+/**
+ * QualCloud (Phase 13) Stage 2 — Deviation & Non-Conformance
+ * Management. Master lifecycle stages 1–3 (Detect/Raise → Assess &
+ * Classify → Investigate/Root Cause), specialized for a deviation.
+ * `capa_pending → closed` is guarded (`QualityWorkflowGuards`) —
+ * cannot close until a linked `Capa` exists and has reached an
+ * effective/closed state, mirroring VigiCloud's own "cannot close
+ * with open obligations" precedent exactly.
+ */
+export const QUALITY_DEVIATION_WORKFLOW_RECORD_TYPE = 'quality_deviation'
+
+export const QUALITY_DEVIATION_WORKFLOW_STATES = [
+  { key: 'detected', name: 'Detected', isInitial: true, isTerminal: false },
+  { key: 'classifying', name: 'Classifying', isInitial: false, isTerminal: false },
+  { key: 'investigating', name: 'Investigating', isInitial: false, isTerminal: false },
+  { key: 'capa_pending', name: 'CAPA Pending', isInitial: false, isTerminal: false },
+  { key: 'closed', name: 'Closed', isInitial: false, isTerminal: true },
+] as const
+
+export const QUALITY_DEVIATION_WORKFLOW_TRANSITIONS: {
+  from: string
+  to: string
+  requiredRoleKey: string
+  requiresSignature: boolean
+}[] = [
+  {
+    from: 'detected',
+    to: 'classifying',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  {
+    from: 'classifying',
+    to: 'investigating',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  {
+    from: 'investigating',
+    to: 'capa_pending',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: false,
+  },
+  // Closing a deviation is the real compliance sign-off — signature-gated,
+  // matching CAPA closure's own established precedent.
+  {
+    from: 'capa_pending',
+    to: 'closed',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
+]
+
+// ── QualCloud (Phase 13) Stage 4 — Change Control ───────────────────────
+
+export const QUALITY_CHANGE_CONTROL_WORKFLOW_RECORD_TYPE = 'quality_change_control'
+
+export const QUALITY_CHANGE_CONTROL_WORKFLOW_STATES = [
+  { key: 'proposed', name: 'Proposed', isInitial: true, isTerminal: false },
+  { key: 'impact_assessment', name: 'Impact Assessment', isInitial: false, isTerminal: false },
+  { key: 'approved', name: 'Approved', isInitial: false, isTerminal: false },
+  { key: 'implementing', name: 'Implementing', isInitial: false, isTerminal: false },
+  { key: 'verifying', name: 'Verifying', isInitial: false, isTerminal: false },
+  { key: 'closed', name: 'Closed', isInitial: false, isTerminal: true },
+] as const
+
+export const QUALITY_CHANGE_CONTROL_WORKFLOW_TRANSITIONS: {
+  from: string
+  to: string
+  requiredRoleKey: string
+  requiresSignature: boolean
+}[] = [
+  {
+    from: 'proposed',
+    to: 'impact_assessment',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  // The real cross-functional sign-off — signature-gated, and guarded
+  // (`QualityWorkflowGuards`) to require every flagged approver role has
+  // already recorded its approval via `recordApproval()`.
+  {
+    from: 'impact_assessment',
+    to: 'approved',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
+  {
+    from: 'approved',
+    to: 'implementing',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  {
+    from: 'implementing',
+    to: 'verifying',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  // Cannot close until verification confirms no adverse effect — guarded.
+  {
+    from: 'verifying',
+    to: 'closed',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
+]
+
+// ── QualCloud (Phase 13) Stage 5 — Complaint Handling ───────────────────
+
+export const QUALITY_COMPLAINT_WORKFLOW_RECORD_TYPE = 'quality_complaint'
+
+export const QUALITY_COMPLAINT_WORKFLOW_STATES = [
+  { key: 'intake', name: 'Intake', isInitial: true, isTerminal: false },
+  { key: 'classifying', name: 'Classifying', isInitial: false, isTerminal: false },
+  { key: 'investigating', name: 'Investigating', isInitial: false, isTerminal: false },
+  { key: 'resolved', name: 'Resolved', isInitial: false, isTerminal: true },
+] as const
+
+export const QUALITY_COMPLAINT_WORKFLOW_TRANSITIONS: {
+  from: string
+  to: string
+  requiredRoleKey: string
+  requiresSignature: boolean
+}[] = [
+  {
+    from: 'intake',
+    to: 'classifying',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  {
+    from: 'classifying',
+    to: 'investigating',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  // Not signature-gated — deliberately lighter-weight than closing a
+  // Deviation/CAPA, matching this stage's own "not every complaint needs
+  // a CAPA" reasoning; the resolution-time KPI is meant to be a real,
+  // frequently-hit metric, not a heavy compliance sign-off every time.
+  {
+    from: 'investigating',
+    to: 'resolved',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: false,
+  },
+]
+
+// ── QualCloud (Phase 13) Stage 6 — OOS/OOT Investigation ────────────────
+
+export const QUALITY_OOS_WORKFLOW_RECORD_TYPE = 'quality_oos'
+
+export const QUALITY_OOS_WORKFLOW_STATES = [
+  { key: 'phase_1_lab_investigation', name: 'Phase 1 — Lab Investigation', isInitial: true, isTerminal: false },
+  { key: 'phase_2_manufacturing_investigation', name: 'Phase 2 — Manufacturing Investigation', isInitial: false, isTerminal: false },
+  { key: 'closed', name: 'Closed', isInitial: false, isTerminal: true },
+] as const
+
+export const QUALITY_OOS_WORKFLOW_TRANSITIONS: {
+  from: string
+  to: string
+  requiredRoleKey: string
+  requiresSignature: boolean
+}[] = [
+  {
+    from: 'phase_1_lab_investigation',
+    to: 'phase_2_manufacturing_investigation',
+    requiredRoleKey: 'QUALITY_ASSOCIATE',
+    requiresSignature: false,
+  },
+  // The real *Barr Labs* guard: only allowed with a documented assignable
+  // lab cause — enforced by `QualityWorkflowGuards`, not just role/signature.
+  {
+    from: 'phase_1_lab_investigation',
+    to: 'closed',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
+  {
+    from: 'phase_2_manufacturing_investigation',
+    to: 'closed',
+    requiredRoleKey: 'QUALITY_MANAGER',
+    requiresSignature: true,
+  },
 ]
