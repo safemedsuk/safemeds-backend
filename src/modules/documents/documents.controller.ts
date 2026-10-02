@@ -17,18 +17,11 @@ import { memoryStorage } from 'multer'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { DocumentsService } from './documents.service'
 import { CreateDocumentUploadDto } from './dto/create-document-upload.dto'
 import { DirectUploadDto } from './dto/direct-upload.dto'
 
-// Matches `UPLOAD_MAX_FILE_SIZE_MB`'s default (10) — `multer`'s own limit
-// option needs a plain number at decorator-evaluation time, before DI/
-// ConfigService exist, same constraint the pre-existing licence-upload
-// endpoint already works around the same way. `DocumentsService.uploadDirect()`
-// re-checks against the real configured value once it does have
-// ConfigService, so a non-default env value is still enforced correctly —
-// this is just the outer, slightly-generous multer-level backstop.
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 @ApiTags('documents')
 @Controller()

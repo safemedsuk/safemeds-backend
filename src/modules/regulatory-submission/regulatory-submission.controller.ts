@@ -17,14 +17,9 @@ import { memoryStorage } from 'multer'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { RegulatorySubmissionService } from './regulatory-submission.service'
 
-// Matches `DocumentsController`'s own outer multer limit — see that
-// class's doc comment for why this is a plain number, not read from
-// `ConfigService`, and why `DocumentsService.uploadDirect()`'s own
-// re-check against the real configured value is what actually enforces
-// a non-default limit.
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 /**
  * VigiCloud Stage 12 — case-scoped generate/list live on `PvCaseController`

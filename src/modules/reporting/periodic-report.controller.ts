@@ -16,11 +16,10 @@ import { memoryStorage } from 'multer'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { GeneratePeriodicReportDto } from './dto/generate-periodic-report.dto'
 import { PeriodicReportService } from './periodic-report.service'
 
-// Matches `RegulatorySubmissionController`'s own outer multer limit.
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 @ApiTags('periodic-reports')
 @Controller('reporting/periodic-reports')

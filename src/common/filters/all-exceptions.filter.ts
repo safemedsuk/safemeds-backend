@@ -1,9 +1,11 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import type { Request, Response } from 'express'
+import { MulterError } from 'multer'
 import { Logger } from 'nestjs-pino'
 
 import type { RequestWithId } from '../middleware/request-id.middleware'
+import { MAX_UPLOAD_MB } from '../upload-limits.const'
 
 interface ErrorEnvelope {
   error: {
@@ -90,6 +92,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
+    // `MulterError` (thrown mid-multipart-parse when a file exceeds a
+    // `FileInterceptor`'s own `limits.fileSize`) is a plain `Error`
+    // subclass, never an `HttpException` — without this branch it fell
+    // through to the generic 500 "An unexpected error occurred" below,
+    // which told a user nothing about *why* their upload failed and
+    // logged it as a genuine unhandled server error even though it's a
+    // completely ordinary, expected client input problem. Found while
+    // investigating a real-usage report of uploads silently failing with
+    // no clear error — this was the real backend half of it (the other
+    // half was the frontend having no client-side size pre-check at all,
+    // fixed separately in `lib/api/client.ts`).
+    if (exception instanceof MulterError) {
+      return this.resolveMulterError(exception)
+    }
+
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       code: 'INTERNAL_SERVER_ERROR',
@@ -123,6 +140,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     return { status, code: HTTP_STATUS_CODES[status] ?? 'HTTP_ERROR', message: exception.message }
+  }
+
+  private resolveMulterError(exception: MulterError): ResolvedError {
+    if (exception.code === 'LIMIT_FILE_SIZE') {
+      return {
+        status: HttpStatus.PAYLOAD_TOO_LARGE,
+        code: 'FILE_TOO_LARGE',
+        message: `File exceeds the maximum upload size of ${MAX_UPLOAD_MB}MB — please use a smaller file.`,
+      }
+    }
+
+    return {
+      status: HttpStatus.BAD_REQUEST,
+      code: 'UPLOAD_ERROR',
+      message: 'This file could not be uploaded.',
+    }
   }
 
   private resolvePrismaError(

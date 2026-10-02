@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Param,
   ParseFilePipeBuilder,
@@ -16,10 +17,9 @@ import { memoryStorage } from 'multer'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { RegSubmissionService } from './reg-submission.service'
 
-/** Matches `DocumentsController`'s own outer multer limit — see that class's doc comment for why this is a plain number and why `DocumentsService.uploadDirect()`'s own re-check is what actually enforces a non-default limit. */
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 @ApiTags('reg-submissions')
 @Controller('reg-dossiers/:dossierId/submissions')
@@ -63,5 +63,16 @@ export class RegSubmissionController {
       { buffer: file.buffer, originalname: file.originalname, mimetype: file.mimetype },
       { ip: req.ip },
     )
+  }
+
+  /** testing-correction-explanation.md §1.3 — the wrong file can be removed and a correct one attached in its place via `attachEvidence()` again. */
+  @RequirePermissions('regulatory.submit')
+  @Delete(':submissionId/evidence')
+  removeEvidence(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('submissionId') submissionId: string,
+    @Req() req: Request,
+  ) {
+    return this.regSubmissionService.removeEvidence(actor, submissionId, { ip: req.ip })
   }
 }

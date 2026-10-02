@@ -28,6 +28,7 @@ import { Public } from '../../common/decorators/public.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { PaginationQueryDto } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { EnvConfig } from '../../config/env.validation'
 import { RolesService } from '../roles/roles.service'
 import {
@@ -89,7 +90,7 @@ export class AuthController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
+      limits: { fileSize: MAX_UPLOAD_BYTES },
     }),
   )
   async uploadLicence(

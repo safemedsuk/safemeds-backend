@@ -243,7 +243,7 @@ export class RegFeeLedgerService {
     countryId: string,
     authorityId: string,
     productClass: string,
-    actorUserId: string,
+    actorUserId: string | null,
   ): Promise<void> {
     const schedules = await this.regConfigService.resolveFeeSchedules(
       countryId,
