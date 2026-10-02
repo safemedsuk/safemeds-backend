@@ -11,6 +11,7 @@ import { RegConfigService } from './reg-config.service'
 import { RegDeadlineService } from './reg-deadline.service'
 import { addInterval } from './reg-deadline-date.util'
 import { REG_REGISTRATION_RECORD_TYPE } from './reg-dossier.service'
+import { RegFeeLedgerService } from './reg-fee-ledger.service'
 import { RegPostMarketObligationService } from './reg-post-market-obligation.service'
 
 /**
@@ -43,13 +44,41 @@ export class RegWorkflowGuards implements OnModuleInit {
     private readonly regConfigService: RegConfigService,
     private readonly regDeadlineService: RegDeadlineService,
     private readonly regPostMarketObligationService: RegPostMarketObligationService,
+    private readonly regFeeLedgerService: RegFeeLedgerService,
   ) {}
 
   onModuleInit(): void {
     this.statusSyncRegistry.register(
       REG_REGISTRATION_RECORD_TYPE,
       async ({ tx, recordId, companyId, actorUserId, toStateKey, payload }) => {
-        await tx.regDossier.update({ where: { id: recordId }, data: { status: toStateKey } })
+        // testing-correction-explanation.md §2.4 — the 3 approval-time
+        // document uploads are persisted here, alongside the status write
+        // every transition already does, rather than a second update —
+        // `requireApprovalData`'s own guard already proved whichever of
+        // these this dossier's kind needs are present in `payload` before
+        // this status-sync function ever runs.
+        await tx.regDossier.update({
+          where: { id: recordId },
+          data: {
+            status: toStateKey,
+            ...(toStateKey === 'approved'
+              ? {
+                  approvalPaymentProofDocumentId:
+                    typeof payload?.approvalPaymentProofDocumentId === 'string'
+                      ? payload.approvalPaymentProofDocumentId
+                      : undefined,
+                  approvalInvoiceDocumentId:
+                    typeof payload?.approvalInvoiceDocumentId === 'string'
+                      ? payload.approvalInvoiceDocumentId
+                      : undefined,
+                  approvalEvidenceDocumentId:
+                    typeof payload?.approvalEvidenceDocumentId === 'string'
+                      ? payload.approvalEvidenceDocumentId
+                      : undefined,
+                }
+              : {}),
+          },
+        })
 
         if (toStateKey === 'approved') {
           const dossier = await tx.regDossier.findUniqueOrThrow({
@@ -202,6 +231,22 @@ export class RegWorkflowGuards implements OnModuleInit {
               registration,
               actorUserId ?? null,
             )
+
+            // RegCloud testing-correction-explanation.md §1.1 — this was
+            // previously only wired into MasterDataService.createRegistration()
+            // (the manual Master Data entry path), never into the real path a
+            // registration actually gets created through: a dossier reaching
+            // Approved. Fresh registration only (never on a variation/renewal
+            // — see the `if (variation)` branch above), matching "an
+            // application fee is charged once, at first registration."
+            await this.regFeeLedgerService.createApplicationFeeInvoiceOnRegistration(
+              companyId,
+              registration.id,
+              dossier.authority.countryId,
+              dossier.authorityId,
+              dossier.productClass,
+              actorUserId ?? null,
+            )
           }
         }
 
@@ -233,28 +278,84 @@ export class RegWorkflowGuards implements OnModuleInit {
       },
     )
 
-    // Stage 4 — blocked until a generated `RegSubmission` has real dispatch evidence attached, the same "No Gateway" honesty VigiCloud's own E2B submission established.
+    // Stage 4 — blocked until a generated `RegSubmission` has real dispatch
+    // evidence attached, the same "No Gateway" honesty VigiCloud's own E2B
+    // submission established. testing-correction-explanation.md §3.1 —
+    // also registered on `renewal_requested`, which reuses this exact same
+    // Generate-Submission-then-Attach-Evidence mechanism, never a
+    // duplicate/parallel gate.
+    const requireDispatchEvidence: TransitionGuardFn = async ({ tx, recordId, toStateKey }) => {
+      if (toStateKey !== 'submitted') return { allowed: true }
+
+      const latest = await tx.regSubmission.findFirst({
+        where: { regDossierId: recordId },
+        orderBy: { submissionNumber: 'desc' },
+      })
+      if (!latest) {
+        return {
+          allowed: false,
+          reason:
+            'No submission package has been generated for this dossier yet — generate one before marking it Submitted.',
+        }
+      }
+      if (!latest.evidenceDocumentId) {
+        return {
+          allowed: false,
+          reason: "This dossier's generated submission has no dispatch evidence attached yet.",
+        }
+      }
+      return { allowed: true }
+    }
     this.guardRegistry.register(
       REG_REGISTRATION_RECORD_TYPE,
       'completeness_check',
+      requireDispatchEvidence,
+    )
+    this.guardRegistry.register(
+      REG_REGISTRATION_RECORD_TYPE,
+      'renewal_requested',
+      requireDispatchEvidence,
+    )
+
+    // testing-correction-explanation.md §2.2 — blocked until the 3
+    // documents required at Variation Application (proof of payment, PPB
+    // invoice, ≥1 accompanying-change document) are all present. The
+    // first two are named fields on `RegVariation` itself; the third is
+    // deliberately checked by count against the generic `Document` table
+    // (any `Document` row under `recordType: 'reg_variation'`/this
+    // variation's own id, excluding the two named ones), since "one or
+    // more" doesn't fit a single FK.
+    this.guardRegistry.register(
+      REG_REGISTRATION_RECORD_TYPE,
+      'variation_application',
       async ({ tx, recordId, toStateKey }) => {
         if (toStateKey !== 'submitted') return { allowed: true }
 
-        const latest = await tx.regSubmission.findFirst({
+        const variation = await tx.regVariation.findFirstOrThrow({
           where: { regDossierId: recordId },
-          orderBy: { submissionNumber: 'desc' },
         })
-        if (!latest) {
+        const missing: string[] = []
+        if (!variation.paymentProofDocumentId) missing.push('proof of payment')
+        if (!variation.invoiceDocumentId) missing.push('the PPB variation invoice')
+        if (missing.length > 0) {
+          return {
+            allowed: false,
+            reason: `This variation is missing required document(s): ${missing.join(', ')}.`,
+          }
+        }
+
+        const accompanyingCount = await tx.document.count({
+          where: {
+            recordType: 'reg_variation',
+            recordId: variation.id,
+            id: { notIn: [variation.paymentProofDocumentId!, variation.invoiceDocumentId!] },
+          },
+        })
+        if (accompanyingCount === 0) {
           return {
             allowed: false,
             reason:
-              'No submission package has been generated for this dossier yet — generate one before marking it Submitted.',
-          }
-        }
-        if (!latest.evidenceDocumentId) {
-          return {
-            allowed: false,
-            reason: "This dossier's generated submission has no dispatch evidence attached yet.",
+              'Attach at least one document describing the change this variation covers before submitting it.',
           }
         }
         return { allowed: true }
@@ -265,8 +366,11 @@ export class RegWorkflowGuards implements OnModuleInit {
     // own content to already be logged (`RegQueryService.receive()`).
     const requireOpenQuery: TransitionGuardFn = async ({ tx, recordId, toStateKey }) => {
       if (toStateKey !== 'query_received') return { allowed: true }
+      // CEO feedback, 30 Sep 2026 — the register's own widened lifecycle
+      // (`open`/`in_progress`/`responded`/`closed`) means "still
+      // unanswered" is `open` OR `in_progress` now, not just `open`.
       const openQuery = await tx.regQuery.findFirst({
-        where: { regDossierId: recordId, status: 'open' },
+        where: { regDossierId: recordId, status: { in: ['open', 'in_progress'] } },
       })
       if (!openQuery) {
         return {
@@ -293,7 +397,11 @@ export class RegWorkflowGuards implements OnModuleInit {
           where: { regDossierId: recordId },
           orderBy: { createdAt: 'desc' },
         })
-        if (!latest || latest.status !== 'closed') {
+        // CEO feedback, 30 Sep 2026 — a real response (`responded`) is
+        // enough to resubmit; the query's own later, separate `closed`
+        // filing-away step is not a prerequisite for the dossier's own
+        // workflow to move on.
+        if (!latest || (latest.status !== 'responded' && latest.status !== 'closed')) {
           return {
             allowed: false,
             reason: 'Respond to the open regulator query before resubmitting for review.',
@@ -330,6 +438,16 @@ export class RegWorkflowGuards implements OnModuleInit {
         )) || typeof payload?.expiresOn === 'string',
       )
 
+      // testing-correction-explanation.md §2.4 — every approval, registration
+      // or not, needs real proof it actually succeeded before signing.
+      if (typeof payload?.approvalEvidenceDocumentId !== 'string') {
+        return {
+          allowed: false,
+          reason:
+            'A document proving this approval actually succeeded (the PPB approval letter/certificate) is required before signing.',
+        }
+      }
+
       if (!variation) {
         if (
           typeof payload?.registrationNumber !== 'string' ||
@@ -345,6 +463,19 @@ export class RegWorkflowGuards implements OnModuleInit {
             allowed: false,
             reason:
               'No renewal cadence is configured for this market — an explicit expiry date is required to approve this dossier.',
+          }
+        }
+        // testing-correction-explanation.md §2.4 — a fresh registration
+        // additionally needs proof the application fee was paid, distinct
+        // from a variation/renewal (which already collected this pair at
+        // Variation Application, per `RegVariation`'s own fields).
+        const missing: string[] = []
+        if (typeof payload?.approvalPaymentProofDocumentId !== 'string') missing.push('proof of payment')
+        if (typeof payload?.approvalInvoiceDocumentId !== 'string') missing.push('the PPB invoice')
+        if (missing.length > 0) {
+          return {
+            allowed: false,
+            reason: `This registration approval is missing required document(s): ${missing.join(', ')}.`,
           }
         }
         return { allowed: true }
