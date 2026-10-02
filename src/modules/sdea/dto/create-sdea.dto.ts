@@ -20,6 +20,12 @@ export class CreateSdeaDto {
   @IsString()
   templateUsed?: string
 
+  /** Real-usage request, 22 Sep 2026 — see `Sdea.receivedDate`'s own schema doc comment for the full account of why this is distinct from `effectiveDate`. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  receivedDate?: string
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()

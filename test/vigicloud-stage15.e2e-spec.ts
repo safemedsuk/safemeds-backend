@@ -124,6 +124,97 @@ describe('VigiCloud Stage 15 (e2e)', () => {
     })
   })
 
+  /**
+   * Seeds a `Document` row directly (never through the real upload
+   * endpoint) — `DistributorTrainingService.attachCertificate()` only
+   * ever validates such a row exists for this exact `(recordType,
+   * recordId, companyId)`, it never itself calls `DocumentsService`,
+   * so this is a faithful, real fixture for that check. Deliberately
+   * avoids the generic `POST /records/:type/:id/documents/upload`
+   * endpoint here: that path hits the already-documented, pre-existing
+   * Jest/AWS-SDK TLS-handshake gotcha (`EPROTO`) this repo's own
+   * CLAUDE.md gotchas list already covers at length for Stage 12 (and
+   * confirmed there as conclusively not a product bug) — reproducing
+   * it again here would only be re-litigating an already-closed
+   * investigation, not testing anything new about this feature.
+   */
+  async function seedDocumentFor(recordType: string, recordId: string, actor: TestActor, title: string): Promise<string> {
+    const documentId = randomUUID()
+    await withBypass((tx) =>
+      tx.document.create({
+        data: { id: documentId, companyId, recordType, recordId, title, createdBy: actor.userId },
+      }),
+    )
+    return documentId
+  }
+
+  describe('Real-usage request, 22 Sep 2026 (item 6) — Distributor Training records', () => {
+    it('logs training, attaches a real certificate, computes status, and reports "missing" for an untrained distributor', async () => {
+      const manager = await actorWith('QUALITY_MANAGER_15J', ['reconciliation.manage', 'reconciliation.view'])
+      const viewer = await actorWith('EXECUTIVE_READONLY_15J', ['reconciliation.view'])
+
+      const distA = await authedWrite(request(httpServer(app)).post('/api/v1/distributors'), manager).send({ name: 'Trained Distribution Ltd' }).expect(201)
+      const distB = await authedWrite(request(httpServer(app)).post('/api/v1/distributors'), manager).send({ name: 'Untrained Distribution Ltd' }).expect(201)
+
+      // Untrained distributor: the real "proof they're trained annually" flag reports missing.
+      const missingStatus = await authed(request(httpServer(app)).get(`/api/v1/distributor-training-records/status/${distB.body.data.id}`), viewer).expect(200)
+      expect(missingStatus.body.data.status).toBe('missing')
+
+      const record = await authedWrite(request(httpServer(app)).post('/api/v1/distributor-training-records'), manager)
+        .send({
+          distributorId: distA.body.data.id,
+          trainingType: 'pv_annual',
+          title: 'Annual PV/Reporting-Obligations Training 2026',
+          completionDate: '2026-01-15',
+          expiryDate: '2027-01-15',
+        })
+        .expect(201)
+      expect(record.body.data.title).toBe('Annual PV/Reporting-Obligations Training 2026')
+
+      // A viewer can read but never log/attach.
+      await authed(request(httpServer(app)).get('/api/v1/distributor-training-records'), viewer).expect(200)
+      await authedWrite(request(httpServer(app)).post('/api/v1/distributor-training-records'), viewer)
+        .send({ distributorId: distA.body.data.id, trainingType: 'x', title: 'y', completionDate: '2026-01-01' })
+        .expect(403)
+
+      const recordId = record.body.data.id as string
+      const documentId = await seedDocumentFor('distributor_training_record', recordId, manager, 'Training completion certificate')
+      const withCertificate = await authedWrite(request(httpServer(app)).post(`/api/v1/distributor-training-records/${recordId}/certificate`), manager)
+        .send({ documentId })
+        .expect(201)
+      expect(withCertificate.body.data.certificateDocumentId).toBe(documentId)
+
+      const list = await authed(request(httpServer(app)).get(`/api/v1/distributor-training-records?distributorId=${distA.body.data.id}`), viewer).expect(200)
+      expect(list.body.data).toHaveLength(1)
+      expect(list.body.data[0].computedStatus).toBe('valid')
+
+      const trainedStatus = await authed(request(httpServer(app)).get(`/api/v1/distributor-training-records/status/${distA.body.data.id}`), viewer).expect(200)
+      expect(trainedStatus.body.data.status).toBe('valid')
+      expect(trainedStatus.body.data.record.id).toBe(recordId)
+
+      const audit = await testPrisma.auditEntry.findFirst({ where: { action: 'distributor_training_record_logged', recordId } })
+      expect(audit).toBeTruthy()
+    })
+
+    it('reflects an expired training as expired, both in the list and the per-distributor status', async () => {
+      const manager = await actorWith('QUALITY_MANAGER_15K', ['reconciliation.manage', 'reconciliation.view'])
+      const dist = await authedWrite(request(httpServer(app)).post('/api/v1/distributors'), manager).send({ name: 'Lapsed Distribution Ltd' }).expect(201)
+
+      await authedWrite(request(httpServer(app)).post('/api/v1/distributor-training-records'), manager)
+        .send({
+          distributorId: dist.body.data.id,
+          trainingType: 'pv_annual',
+          title: 'Last year\'s training',
+          completionDate: '2024-01-01',
+          expiryDate: '2025-01-01',
+        })
+        .expect(201)
+
+      const status = await authed(request(httpServer(app)).get(`/api/v1/distributor-training-records/status/${dist.body.data.id}`), manager).expect(200)
+      expect(status.body.data.status).toBe('expired')
+    })
+  })
+
   describe('Stage 15.1 — Reconciliation: auto-match, manual mapping, report generation', () => {
     it('auto-matches cases by Reporter.organization, flags the rest as unmatched, and a generated report totals correctly', async () => {
       const manager = await actorWith('QUALITY_MANAGER_15C', ['reconciliation.manage', 'pv.capture_case'])

@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsDefined,
   IsOptional,
+  IsUUID,
   ValidateNested,
 } from 'class-validator'
 
@@ -69,6 +70,13 @@ export class SubmitPublicReportDto {
   @Type(() => CaseConsentInputDto)
   consent?: CaseConsentInputDto
 
+  /** Real-usage bug, 22 Sep 2026 — see `CreatePvCaseDto.contactConsent`'s own doc comment for the full account; the public form needs this exactly as much as the internal wizard does. */
+  @ApiPropertyOptional({ type: CaseConsentInputDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CaseConsentInputDto)
+  contactConsent?: CaseConsentInputDto
+
   @ApiPropertyOptional({ default: false })
   @IsOptional()
   @IsBoolean()
@@ -79,4 +87,19 @@ export class SubmitPublicReportDto {
   @ValidateNested()
   @Type(() => PregnancyInputDto)
   pregnancy?: PregnancyInputDto
+
+  /**
+   * Real-usage request, 22 Sep 2026 (item 12) — "add country of
+   * residence on the About You card... when cases are reported from
+   * here, both country codes on the reference number should match the
+   * country of residence." Optional at the DTO level only so an older
+   * client can't be broken by a required-field validation error — the
+   * frontend form always collects it going forward, and
+   * `PublicReportingService.submit()` falls back to the company's own
+   * home country when it's genuinely missing.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  countryOfResidenceId?: string
 }

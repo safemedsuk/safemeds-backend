@@ -8,6 +8,7 @@ import { parseCsvToObjects } from './csv.util'
 import { ClinicalTrialSubjectImporter } from './importers/clinical-trial-subject.importer'
 import { Importer, ImporterColumn, RequestMeta } from './importers/importer.interface'
 import { ProductImporter } from './importers/product.importer'
+import { RmpImporter } from './importers/rmp.importer'
 import { UserInviteImporter } from './importers/user-invite.importer'
 
 export interface PreviewRowResult {
@@ -53,11 +54,13 @@ export class BulkImportService {
     userInviteImporter: UserInviteImporter,
     productImporter: ProductImporter,
     clinicalTrialSubjectImporter: ClinicalTrialSubjectImporter,
+    rmpImporter: RmpImporter,
   ) {
     this.importers = new Map<string, Importer>([
       [userInviteImporter.importType, userInviteImporter],
       [productImporter.importType, productImporter],
       [clinicalTrialSubjectImporter.importType, clinicalTrialSubjectImporter],
+      [rmpImporter.importType, rmpImporter],
     ])
   }
 

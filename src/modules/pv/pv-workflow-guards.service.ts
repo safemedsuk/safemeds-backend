@@ -113,6 +113,21 @@ export class PvWorkflowGuards implements OnModuleInit {
       },
     )
 
+    // Real-usage request, 22 Sep 2026 — "moving a case back to medical
+    // review from narrative should carry a reason besides it, this is
+    // highly important." Reuses the exact same requires-a-typed-note
+    // mechanism `SignalWorkflowGuards` already established, scoped only
+    // to this one outgoing transition (the *approve*-forward path to
+    // Quality Check above needs no such reason).
+    this.guardRegistry.register(PV_CASE_RECORD_TYPE, 'narrative', ({ toStateKey, note }) => {
+      if (toStateKey !== 'medical_review') return Promise.resolve({ allowed: true })
+      if (note && note.trim().length > 0) return Promise.resolve({ allowed: true })
+      return Promise.resolve({
+        allowed: false,
+        reason: 'A reason is required when sending a case back to Medical Review from Narrative.',
+      })
+    })
+
     // Workflow-map stage 9 — "Cannot close with open obligations": a case
     // can't be locked/archived while it still has an active follow-up
     // cycle or an unresolved possible-duplicate flag against it (on

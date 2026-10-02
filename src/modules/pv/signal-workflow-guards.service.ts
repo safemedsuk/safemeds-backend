@@ -51,5 +51,31 @@ export class SignalWorkflowGuards implements OnModuleInit {
         })
       })
     }
+
+    // Real-usage request, 22 Sep 2026 (item 22) — four-eyes at the level
+    // of recommendation/actions, mirroring `PvWorkflowGuards`'s own
+    // Narrative → Quality Check precedent exactly: only guards the
+    // *approval* path out of Assessed (into Action Recommended), not the
+    // `refuted` path — refuting isn't the self-certification risk
+    // recommending action is.
+    this.guardRegistry.register(
+      SIGNAL_RECORD_TYPE,
+      'assessed',
+      async ({ tx, recordId, toStateKey, actorUserId }) => {
+        if (toStateKey !== 'action_recommended') return { allowed: true }
+
+        const signal = await tx.signal.findFirst({
+          where: { id: recordId },
+          select: { assessedBy: true },
+        })
+        return !signal?.assessedBy || signal.assessedBy !== actorUserId
+          ? { allowed: true }
+          : {
+              allowed: false,
+              reason:
+                'The person recommending action cannot be the same person who recorded this signal\'s assessment.',
+            }
+      },
+    )
   }
 }

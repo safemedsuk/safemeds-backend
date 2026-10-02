@@ -103,9 +103,24 @@ function createTable<T extends Row>() {
   return { rows, create, findFirst, findMany, count, update }
 }
 
+/** Seeded with the two countries this file's fixtures use — Kenya for 'country-1' (the default), Cameroon for 'country-2' (used by the reference-number-format tests to prove the report/occurrence halves can genuinely differ). */
+function buildCountryTable() {
+  const rows = new Map<string, { id: string; isoCode: string }>([
+    ['country-1', { id: 'country-1', isoCode: 'KE' }],
+    ['country-2', { id: 'country-2', isoCode: 'CM' }],
+  ])
+  const findUniqueOrThrow = jest.fn().mockImplementation(({ where }: { where: { id: string } }) => {
+    const found = rows.get(where.id)
+    if (!found) throw new Error(`country ${where.id} not found`)
+    return Promise.resolve(found)
+  })
+  return { rows, findUniqueOrThrow }
+}
+
 function buildHarness(permissions: string[] = ['pv.capture_case']) {
   const tables = {
     case: createTable(),
+    country: buildCountryTable(),
     reporter: createTable(),
     patient: createTable(),
     suspectProduct: createTable(),
@@ -299,7 +314,8 @@ describe('PvCaseService', () => {
         { ip: '1.2.3.4' },
       )
 
-      expect(result.referenceNumber).toMatch(/^PV-\d{4}-\d{5}$/)
+      // Real-usage request, 22 Sep 2026 — {reportISO3}-{year}-{occurrenceISO3}-{5 digits}. Both country halves are Kenya here (`baseDto()`'s default), matching a domestic case.
+      expect(result.referenceNumber).toMatch(/^KEN-\d{4}-KEN-\d{5}$/)
       expect(result.additionalInformation).toBe('Some extra context')
       expect(tables.reporter.rows.size).toBe(1)
       expect(tables.patient.rows.size).toBe(1)
@@ -364,6 +380,42 @@ describe('PvCaseService', () => {
       expect(consentCapture).not.toHaveBeenCalled()
     })
 
+    it("captures a genuinely separate 'contact' consent record, distinct from 'report' consent (real-usage bug, 22 Sep 2026)", async () => {
+      const { service, consentCapture } = buildHarness()
+
+      const result = await service.create(
+        actor,
+        baseDto({
+          consent: { granted: true, method: 'written' },
+          contactConsent: { granted: true, method: 'verbal' },
+        }),
+        { ip: '1.2.3.4' },
+      )
+
+      expect(consentCapture).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ recordId: result.id, consentType: 'report', granted: true, method: 'written' }),
+        { ip: '1.2.3.4' },
+      )
+      expect(consentCapture).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ recordId: result.id, consentType: 'contact', granted: true, method: 'verbal' }),
+        { ip: '1.2.3.4' },
+      )
+      expect(consentCapture).toHaveBeenCalledTimes(2)
+    })
+
+    it('captures only report consent, never contact, when contactConsent is omitted', async () => {
+      const { service, consentCapture } = buildHarness()
+      await service.create(actor, baseDto({ consent: { granted: true, method: 'written' } }), {})
+      expect(consentCapture).toHaveBeenCalledTimes(1)
+      expect(consentCapture).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ consentType: 'report' }),
+        {},
+      )
+    })
+
     it('rejects a platform-staff actor with no company context', async () => {
       const { service } = buildHarness()
       await expect(service.create(platformActor, baseDto(), {})).rejects.toThrow(ForbiddenException)
@@ -374,6 +426,51 @@ describe('PvCaseService', () => {
       const first = await service.create(actor, baseDto(), {})
       const second = await service.create(actor, baseDto(), {})
       expect(first.referenceNumber).not.toBe(second.referenceNumber)
+    })
+
+    describe('reference number format (real-usage request, 22 Sep 2026)', () => {
+      it('uses each country field\'s own ISO3 code independently — a foreign case genuinely differs on each half', async () => {
+        const { service } = buildHarness()
+        const result = await service.create(
+          actor,
+          baseDto({ countryOfReportId: 'country-1', countryOfOccurrenceId: 'country-2' }),
+          {},
+        )
+        expect(result.referenceNumber).toMatch(/^KEN-\d{4}-CMR-\d{5}$/)
+      })
+
+      it('encodes the real current day-of-year in the first 3 digits of the suffix', async () => {
+        const { service } = buildHarness()
+        const result = await service.create(actor, baseDto(), {})
+        const now = new Date()
+        const dayOfYear = Math.floor((now.getTime() - Date.UTC(now.getUTCFullYear(), 0, 1)) / 86_400_000) + 1
+        const [, , , suffix] = result.referenceNumber.split('-')
+        expect(suffix.slice(0, 3)).toBe(dayOfYear.toString().padStart(3, '0'))
+      })
+
+      it('increments the last-2-digit same-day sequence across successive cases for the same company, same day', async () => {
+        const { service } = buildHarness()
+        const first = await service.create(actor, baseDto(), {})
+        const second = await service.create(actor, baseDto(), {})
+        const third = await service.create(actor, baseDto(), {})
+        const seqOf = (ref: string) => Number(ref.split('-')[3].slice(3))
+        expect([seqOf(first.referenceNumber), seqOf(second.referenceNumber), seqOf(third.referenceNumber)]).toEqual([0, 1, 2])
+      })
+
+      it('scopes the same-day sequence per company, not globally', async () => {
+        const { service } = buildHarness()
+        const otherCompanyOwnActor: AuthenticatedUser = { ...actor, companyId: 'company-9', sub: 'user-9' }
+
+        const a = await service.create(actor, baseDto(), {})
+        const b = await service.create(otherCompanyOwnActor, baseDto(), {})
+        const c = await service.create(actor, baseDto(), {})
+
+        expect(a.referenceNumber.split('-')[3].slice(3)).toBe('00')
+        // Company 9's own first case today also starts at 00 — it never sees company 1's count.
+        expect(b.referenceNumber.split('-')[3].slice(3)).toBe('00')
+        // Company 1's second case picks up right where its own sequence left off.
+        expect(c.referenceNumber.split('-')[3].slice(3)).toBe('01')
+      })
     })
 
     // VigiCloud Stage 14 — solicited-intake validation.
@@ -955,6 +1052,82 @@ describe('PvCaseService', () => {
       await expect(harness.service.confirmDraft(actor, created.id, {})).rejects.toMatchObject({
         response: { code: 'MUST_CLAIM_FIRST' },
       })
+    })
+  })
+
+  describe('rejectDraft() (real-usage request, 22 Sep 2026, item 13)', () => {
+    it('flips requiresDraftReview to false, records the reason, clears the claim, and audits it', async () => {
+      const harness = buildHarness()
+      const created = await harness.service.createFromSystemChannel(
+        'company-1',
+        baseDto(),
+        'public_url',
+        null,
+        {},
+      )
+      await harness.service.claimDraft(actor, created.id, {})
+
+      const rejected = await harness.service.rejectDraft(
+        actor,
+        created.id,
+        { reason: 'Duplicate submission of an already-confirmed report' },
+        { ip: '1.1.1.1' },
+      )
+      expect(rejected.requiresDraftReview).toBe(false)
+      expect(rejected.draftRejectionReason).toBe('Duplicate submission of an already-confirmed report')
+      expect(rejected.draftRejectedAt).toBeInstanceOf(Date)
+      expect(rejected.draftClaimedBy).toBeNull()
+      expect(harness.auditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'pv_case_draft_rejected' }),
+      )
+    })
+
+    it('rejects rejecting a case that is not in the draft-review queue', async () => {
+      const harness = buildHarness()
+      const created = await harness.service.create(actor, baseDto(), {})
+
+      await expect(
+        harness.service.rejectDraft(actor, created.id, { reason: 'Not applicable' }, {}),
+      ).rejects.toMatchObject({ response: { code: 'NOT_A_DRAFT' } })
+    })
+
+    it('requires a claim first, same as confirmDraft()', async () => {
+      const harness = buildHarness()
+      const created = await harness.service.createFromSystemChannel(
+        'company-1',
+        baseDto(),
+        'public_url',
+        null,
+        {},
+      )
+
+      await expect(
+        harness.service.rejectDraft(actor, created.id, { reason: 'Spam' }, {}),
+      ).rejects.toMatchObject({ response: { code: 'MUST_CLAIM_FIRST' } })
+    })
+
+    it('rejects rejecting a case claimed by someone else', async () => {
+      const harness = buildHarness()
+      const created = await harness.service.createFromSystemChannel(
+        'company-1',
+        baseDto(),
+        'public_url',
+        null,
+        {},
+      )
+      await harness.service.claimDraft(otherUserSameCompany, created.id, {})
+
+      await expect(
+        harness.service.rejectDraft(actor, created.id, { reason: 'Spam' }, {}),
+      ).rejects.toMatchObject({ response: { code: 'MUST_CLAIM_FIRST' } })
+    })
+
+    it('404s for a case that does not exist', async () => {
+      const harness = buildHarness()
+      await expect(
+        harness.service.rejectDraft(actor, 'nope', { reason: 'Spam' }, {}),
+      ).rejects.toThrow(NotFoundException)
     })
   })
 

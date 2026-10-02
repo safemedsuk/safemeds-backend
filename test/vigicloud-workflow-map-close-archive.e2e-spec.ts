@@ -205,6 +205,31 @@ describe('VigiCloud Workflow Map — Close & Archive (e2e)', () => {
     expect(allowed.body.data.id).toBe(instanceId)
   })
 
+  it('real-usage request, 22 Sep 2026 (item 18) — logging "new information" on an already-Submitted case moves it back to Triage & Seriousness, and a document sent with the response is attached', async () => {
+    const { caseId, instanceId } = await createCaseAtSubmitted()
+
+    const regulatoryAffairsOfficer = await actorWith('REGULATORY_AFFAIRS_OFFICER')
+    await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${caseId}/follow-up`), regulatoryAffairsOfficer).send({}).expect(201)
+    const followUp = await withBypass((tx) => tx.caseFollowUp.findFirstOrThrow({ where: { caseId } }))
+
+    const documentId = randomUUID()
+    await withBypass((tx) => tx.document.create({ data: { id: documentId, companyId, recordType: 'pv_case', recordId: caseId, title: 'Discharge letter sent by reporter', createdBy: regulatoryAffairsOfficer.userId } }))
+
+    const logged = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/case-follow-ups/${followUp.id}/log-attempt`), regulatoryAffairsOfficer)
+      .send({ outcome: 'responded_new_information', note: 'Reporter reports the reaction worsened and sent a discharge letter', documentId })
+      .expect(201)
+    expect(logged.body.data.status).toBe('pending_attempt_1') // still open, not closed
+    expect(logged.body.data.attempts[0].documentId).toBe(documentId)
+
+    const instance = await testPrisma.workflowInstance.findFirstOrThrow({ where: { id: instanceId }, include: { currentState: true } })
+    expect(instance.currentState.stateKey).toBe('triage')
+    const caseRow = await withBypass((tx) => tx.case.findUniqueOrThrow({ where: { id: caseId } }))
+    expect(caseRow.status).toBe('triage')
+
+    const audit = await testPrisma.auditEntry.findFirst({ where: { action: 'pv_case_reopened_for_follow_up', recordId: caseId } })
+    expect(audit).toBeTruthy()
+  })
+
   it('blocks closing while a possible-duplicate review is unresolved (either side of the pairing), then allows it once dismissed', async () => {
     const { caseId, instanceId, qppv } = await createCaseAtSubmitted()
     // A deliberately non-matching second case (different patient age) — the

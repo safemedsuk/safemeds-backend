@@ -268,7 +268,10 @@ describe('VigiCloud Stage 8/9 (e2e)', () => {
 
       const sameActor = await addRoleAndReissueToken(qppv, 'QUALITY_ASSOCIATE')
 
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instanceId}/transition`), sameActor).send({ toStateKey: 'medical_review' }).expect(201)
+      // A reason is now required on this specific reject transition (real-usage request, 22 Sep 2026) — unrelated to four-eyes, which this test still asserts is absent here.
+      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instanceId}/transition`), sameActor)
+        .send({ toStateKey: 'medical_review', note: 'Narrative needs the reaction timeline clarified before QC.' })
+        .expect(201)
 
       const fetched = await authed(request(httpServer(app)).get(`/api/v1/pv/cases/${caseId}`), sameActor).expect(200)
       expect(fetched.body.data.status).toBe('medical_review')

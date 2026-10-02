@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common'
+import { ThrottlerStorage } from '@nestjs/throttler'
 import { createHash, randomUUID } from 'crypto'
 import request from 'supertest'
 
@@ -104,6 +105,20 @@ describe('VigiCloud Stage 3.2 — Public Reporting URL + QR (e2e)', () => {
   })
 
   beforeEach(async () => {
+    // This file's own real, hardcoded-per-route `@Throttle` on
+    // `POST /report/:slug` (5/min, in every environment) is shared
+    // in-memory state across every test in this describe block, keyed
+    // by the connecting IP — which supertest's in-memory server always
+    // reports as the same loopback address regardless of test. With
+    // several tests each making a real public submission, the file's
+    // cumulative call count can exceed 5 within one 60-second run,
+    // failing a later, unrelated test with 429 for no functional
+    // reason. Resetting the throttler's own storage before each test
+    // isolates that shared bucket the same way `resetDatabase()`
+    // already isolates the database — a test-only reset of in-memory
+    // rate-limit state, not a change to the real security throttle.
+    app.get(ThrottlerStorage).storage.clear()
+
     countryId = randomUUID()
     await testPrisma.country.create({ data: { id: countryId, isoCode: 'KE', name: 'Kenya' } })
     companyId = randomUUID()
@@ -174,7 +189,7 @@ describe('VigiCloud Stage 3.2 — Public Reporting URL + QR (e2e)', () => {
     const slug = generated.body.data.publicReportingSlug as string
 
     const submitted = await request(httpServer(app)).post(`/api/v1/report/${slug}`).send(baseSubmission).expect(201)
-    expect(submitted.body.data.referenceNumber).toMatch(/^PV-\d{4}-\d{5}$/)
+    expect(submitted.body.data.referenceNumber).toMatch(/^[A-Z]{3}-\d{4}-[A-Z]{3}-\d{5}$/)
 
     const rawCase = await withBypass((tx) => tx.case.findFirstOrThrow({ where: { companyId, referenceNumber: submitted.body.data.referenceNumber } }))
     expect(rawCase.createdBy).toBeNull()
@@ -221,6 +236,67 @@ describe('VigiCloud Stage 3.2 — Public Reporting URL + QR (e2e)', () => {
     expect(nowClaimed.body.data.draftClaimedBy).toBeTruthy()
     const confirmed = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${rawCase.id}/confirm-draft`), secondTriager).expect(201)
     expect(confirmed.body.data.requiresDraftReview).toBe(false)
+  })
+
+  it('real-usage request, 22 Sep 2026 (item 13) — the 24h reminder scan notifies the claimant of a still-unresolved draft, then rejecting it (with a required reason, kept, never deleted) stops the reminders', async () => {
+    // Deliberately ONE public submission for this whole test (not two) —
+    // `POST /report/:slug` is throttled to 5/min in every environment
+    // (`PublicReportingController`'s own hardcoded `@Throttle`), and this
+    // file already makes several other real submissions elsewhere; a
+    // second call here would risk tipping the file over that limit
+    // within the same 60-second window.
+    const actor = await admin()
+    const generated = await authedWrite(request(httpServer(app)).post('/api/v1/company/public-reporting/slug'), actor).expect(201)
+    const slug = generated.body.data.publicReportingSlug as string
+    const submitted = await request(httpServer(app)).post(`/api/v1/report/${slug}`).send(baseSubmission).expect(201)
+    const rawCase = await withBypass((tx) => tx.case.findFirstOrThrow({ where: { companyId, referenceNumber: submitted.body.data.referenceNumber } }))
+
+    const triagerActor = await triager()
+    await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${rawCase.id}/claim-draft`), triagerActor).expect(201)
+
+    // Back-date creation so the scan considers it already due, without waiting 24 real hours.
+    await withBypass((tx) => tx.case.update({ where: { id: rawCase.id }, data: { createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }))
+
+    const { DraftReviewReminderService } = await import('../src/modules/pv/draft-review-reminder.service')
+    const reminderService = app.get(DraftReviewReminderService)
+    const result = await reminderService.scanAndRemind()
+    expect(result.remindersSent).toBeGreaterThanOrEqual(1)
+
+    const notifications = await authed(request(httpServer(app)).get('/api/v1/notifications'), triagerActor).expect(200)
+    const reminder = (notifications.body.data.rows as Array<{ category: string; recordId: string }>).find((n) => n.category === 'draft_review' && n.recordId === rawCase.id)
+    expect(reminder).toBeTruthy()
+
+    // Scanning again immediately does not double-notify — the reminder audit entry itself governs due-ness.
+    const secondScan = await reminderService.scanAndRemind()
+    expect(secondScan.remindersSent).toBe(0)
+
+    // Rejecting requires a claim, exactly like confirming does.
+    await withBypass((tx) => tx.case.update({ where: { id: rawCase.id }, data: { draftClaimedBy: null, draftClaimedAt: null } }))
+    const rejectRejected = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${rawCase.id}/reject-draft`), triagerActor).send({ reason: 'Spam' })
+    expect(rejectRejected.status).toBe(409)
+    expect(rejectRejected.body.error.code).toBe('MUST_CLAIM_FIRST')
+
+    await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${rawCase.id}/claim-draft`), triagerActor).expect(201)
+    const rejected = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/cases/${rawCase.id}/reject-draft`), triagerActor)
+      .send({ reason: 'Duplicate submission of an already-confirmed report' })
+      .expect(201)
+    expect(rejected.body.data.requiresDraftReview).toBe(false)
+    expect(rejected.body.data.draftRejectionReason).toBe('Duplicate submission of an already-confirmed report')
+    expect(rejected.body.data.draftClaimedBy).toBeNull()
+
+    // The row is kept, never deleted.
+    const stillThere = await withBypass((tx) => tx.case.findFirstOrThrow({ where: { id: rawCase.id } }))
+    expect(stillThere.id).toBe(rawCase.id)
+    expect(stillThere.draftRejectedAt).toBeInstanceOf(Date)
+
+    // Rejected drafts drop out of the queue's own default filter, and out of the reminder scan.
+    const queueAfter = await authed(request(httpServer(app)).get('/api/v1/pv/cases?requiresDraftReview=true'), triagerActor).expect(200)
+    expect(queueAfter.body.data.find((c: { id: string }) => c.id === rawCase.id)).toBeUndefined()
+    const scanAfterReject = await reminderService.scanAndRemind()
+    expect(scanAfterReject.draftsScanned).toBe(0)
+
+    const audit = await testPrisma.auditEntry.findFirst({ where: { action: 'pv_case_draft_rejected', recordId: rawCase.id } })
+    expect(audit).toBeTruthy()
   })
 
   it('404s an anonymous submission against an unknown slug rather than creating a case for nobody', async () => {

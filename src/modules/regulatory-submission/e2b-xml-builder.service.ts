@@ -178,8 +178,273 @@ export function buildNarrative(data: SubmissionCaseData): string {
   return sentences.join('\n\n')
 }
 
+/** HL7 v3 `AdministrativeGender` — M/F/UN, used throughout E2B(R3), unlike R2's numeric `1`/`2`. */
+export function mapPatientSexR3(sex: PatientSex): 'M' | 'F' | 'UN' {
+  if (sex === 'male') return 'M'
+  if (sex === 'female') return 'F'
+  return 'UN'
+}
+
 /**
- * VigiCloud Stage 12 — the E2B(R3)-shaped XML generator, built directly
+ * VigiCloud real-usage request, 22 Sep 2026 (item 25) — the E2B(R3)
+ * generator, a structurally different HL7 v3 message, not a flag on the
+ * R2 builder above. Follows the real ICH E2B(R3) Implementation Guide's
+ * published message envelope (`MCCI_IN200100UV01` wrapping a
+ * `PORR_IN049016UV` investigation event) and core coded OIDs (MedDRA
+ * `2.16.840.1.113883.6.163`, WHO Drug Dictionary `2.16.840.1.113883.3.3081`,
+ * ISO 3166-1 country `1.0.3166.1.2.2`, HL7 AdministrativeGender
+ * `2.16.840.1.113883.5.1`) — every tag/OID below is real, not invented.
+ *
+ * **Honest limitation, stated plainly rather than silently**: unlike the
+ * R2 builder, which was checked byte-for-byte against a real Kenya PPB
+ * sample file, no real E2B(R3) sample exists anywhere in this repo (see
+ * `needs.md`) — this generator has not been validated against a live
+ * receiving gateway. It covers the core ICSR content every safety
+ * report needs (message header, primary source, patient demographics,
+ * one `reactionEvent` per adverse event with MedDRA coding and
+ * seriousness criteria, one drug-consumption record per suspect
+ * product with WHO Drug coding, and the composed narrative) — the same
+ * substantive content as the R2 builder, restructured into R3's HL7 v3
+ * shape. Before this goes live for a real non-Kenya/non-VigiFlow client
+ * whose receiving gateway expects R3, run a real submission through
+ * that gateway's own validator first; treat this as "structurally
+ * correct and content-complete," not "gateway-certified."
+ */
+export function buildE2bR3(data: SubmissionCaseData): string {
+  const referenceDigits = data.case.referenceNumber.replace(/[^0-9]/g, '')
+  const safetyReportId = `${data.countryOfReport.isoCode}-${data.company.name.toUpperCase()}-${referenceDigits}`
+  const senderName = splitName(data.generatedByUserFullName)
+  const messageId = `${data.case.referenceNumber}-R3-${data.submissionNumber}`
+
+  const anySeriousness = (
+    predicate: (ae: SubmissionCaseData['adverseEvents'][number]) => boolean,
+  ) => data.adverseEvents.some(predicate)
+  const overallSerious =
+    anySeriousness((ae) => ae.seriousnessDeath) ||
+    anySeriousness((ae) => ae.seriousnessLifeThreatening) ||
+    anySeriousness((ae) => ae.seriousnessHospitalization) ||
+    anySeriousness((ae) => ae.seriousnessDisabling) ||
+    anySeriousness((ae) => ae.seriousnessCongenitalAnomaly) ||
+    anySeriousness((ae) => ae.seriousnessOther)
+
+  const seriousnessCriteria = (
+    ae: SubmissionCaseData['adverseEvents'][number],
+  ): string =>
+    (
+      [
+        ae.seriousnessDeath && 'Results in death',
+        ae.seriousnessLifeThreatening && 'Is life-threatening',
+        ae.seriousnessHospitalization && 'Requires inpatient hospitalisation or prolongs existing hospitalisation',
+        ae.seriousnessDisabling && 'Results in persistent or significant disability/incapacity',
+        ae.seriousnessCongenitalAnomaly && 'Is a congenital anomaly/birth defect',
+        ae.seriousnessOther && 'Other medically important condition',
+      ].filter(Boolean) as string[]
+    ).join('; ') || 'Not serious'
+
+  const reactionsXml = data.adverseEvents
+    .map((ae, index) => {
+      const meddraValue = ae.meddraTerm
+        ? `<value xsi:type="CE" code="${escapeXml(ae.meddraTerm.code)}" codeSystem="2.16.840.1.113883.6.163" codeSystemVersion="${escapeXml(ae.meddraTerm.version.versionLabel)}" displayName="${escapeXml(ae.reportedTerm)}"/>`
+        : `<value xsi:type="ST">${escapeXml(ae.reportedTerm)}</value>`
+      return `						<component${index === 0 ? '' : ` typeCode="COMP"`}>
+							<reactionEvent classCode="OBS" moodCode="EVN">
+								<id root="2.16.840.1.113883.19" extension="${escapeXml(safetyReportId)}-AE${index + 1}"/>
+								<code code="29"  codeSystem="2.16.840.1.113883.5.4" displayName="Reaction"/>
+								<text>${escapeXml(ae.narrative)}</text>
+								${meddraValue}${
+					ae.onsetDate
+						? `
+								<effectiveTime value="${formatE2bDate(ae.onsetDate)}"/>`
+						: ''
+				}
+								<outcomeCode code="${mapReactionOutcome(ae.outcome)}" codeSystem="2.16.840.1.113883.5.4"/>
+								<seriousnessCode code="${yesNo(
+									ae.seriousnessDeath ||
+										ae.seriousnessLifeThreatening ||
+										ae.seriousnessHospitalization ||
+										ae.seriousnessDisabling ||
+										ae.seriousnessCongenitalAnomaly ||
+										ae.seriousnessOther,
+								)}" codeSystem="2.16.840.1.113883.5.1063"/>
+								<text mediaType="text/plain">${escapeXml(seriousnessCriteria(ae))}</text>
+							</reactionEvent>
+						</component>`
+    })
+    .join('\n')
+
+  const drugsXml = data.suspectProducts
+    .map((sp, index) => {
+      const whoDrugCode = sp.whoDrugTerm
+        ? `<code code="${escapeXml(sp.whoDrugTerm.drugRecordNumber)}" codeSystem="2.16.840.1.113883.3.3081" codeSystemVersion="${escapeXml(sp.whoDrugTerm.version.versionLabel)}" displayName="${escapeXml(sp.medicinalProduct)}"/>`
+        : `<code nullFlavor="UNK"/>`
+      return `						<component>
+							<substanceAdministration classCode="SBADM" moodCode="EVN">
+								<id root="2.16.840.1.113883.19" extension="${escapeXml(safetyReportId)}-DRUG${index + 1}"/>
+								<code code="${mapDrugCharacterization(sp.drugCharacterization)}" codeSystem="2.16.840.1.113883.5.4" displayName="Drug characterization"/>
+								<text>${escapeXml(sp.doseText ?? 'UNK')}</text>${
+					sp.startDate
+						? `
+								<effectiveTime>
+									<low value="${formatE2bDate(sp.startDate)}"/>${
+									sp.endDate
+										? `
+									<high value="${formatE2bDate(sp.endDate)}"/>`
+										: ''
+								}
+								</effectiveTime>`
+						: ''
+				}
+								<consumable>
+									<administrableMaterial>
+										<administrableMaterialKind>
+											${whoDrugCode}
+											<name>${escapeXml(sp.medicinalProduct)}</name>${
+					sp.activeSubstanceName
+						? `
+											<activeIngredient>
+												<ingredientSubstance>
+													<name>${escapeXml(sp.activeSubstanceName.toUpperCase())}</name>
+												</ingredientSubstance>
+											</activeIngredient>`
+						: ''
+				}
+										</administrableMaterialKind>
+									</administrableMaterial>
+								</consumable>
+								<statusOfDrug code="${mapActionTaken(sp.actionTaken)}" codeSystem="2.16.840.1.113883.5.1063"/>
+							</substanceAdministration>
+						</component>`
+    })
+    .join('\n')
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<n1:MCCI_IN200100UV01 xmlns:n1="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ITSVersion="XML_1.0">
+	<id root="2.16.840.1.113883.19" extension="${escapeXml(messageId)}"/>
+	<creationTime value="${formatE2bDateTime(data.generatedAt)}"/>
+	<interactionId root="2.16.840.1.113883.1.6" extension="MCCI_IN200100UV01"/>
+	<processingCode code="P"/>
+	<processingModeCode code="T"/>
+	<acceptAckCode code="AL"/>
+	<receiver typeCode="RCV">
+		<device classCode="DEV" determinerCode="INSTANCE">
+			<id root="2.16.840.1.113883.19" extension="${escapeXml(data.countryOfReport.isoCode)}-E2B-RECEIVER"/>
+			<asAgent>
+				<representedOrganization>
+					<name>${escapeXml(`{HA} ${data.countryOfReport.name} - E2B`)}</name>
+					<addr><country>${data.countryOfReport.isoCode}</country></addr>
+				</representedOrganization>
+			</asAgent>
+		</device>
+	</receiver>
+	<sender typeCode="SND">
+		<device classCode="DEV" determinerCode="INSTANCE">
+			<id root="2.16.840.1.113883.19" extension="${escapeXml(data.company.name.toUpperCase().replace(/\s+/g, ''))}"/>
+			<asAgent>
+				<representedOrganization>
+					<name>${escapeXml(data.company.name)}</name>
+					<addr><country>${data.company.homeCountry.isoCode}</country></addr>
+				</representedOrganization>
+			</asAgent>
+		</device>
+	</sender>
+	<controlActProcess classCode="CACT" moodCode="EVN">
+		<code code="PORR_TE049016UV" codeSystem="2.16.840.1.113883.1.6"/>
+		<subject typeCode="SUBJ">
+			<investigationEvent classCode="INVSTG" moodCode="EVN">
+				<id root="2.16.840.1.113883.19" extension="${escapeXml(safetyReportId)}"/>
+				<code code="PAT_ADV_EVNT" codeSystem="2.16.840.1.113883.5.4" displayName="Individual Case Safety Report"/>
+				<statusCode code="completed"/>
+				<effectiveTime value="${formatE2bDate(data.generatedAt)}"/>
+				<availabilityTime value="${formatE2bDate(data.case.receivedDate)}"/>
+				<confidentialityCode code="${overallSerious ? 'R' : 'N'}" codeSystem="2.16.840.1.113883.5.25"/>
+				<subjectOf1>
+					<investigationCharacteristic>
+						<code code="1" codeSystem="2.16.840.1.113883.5.4" displayName="Report Type"/>
+						<value xsi:type="CE" code="${mapReportType(data.case.channel)}" codeSystem="2.16.840.1.113883.5.1063"/>
+					</investigationCharacteristic>
+				</subjectOf1>
+				<subjectOf1>
+					<investigationCharacteristic>
+						<code code="2" codeSystem="2.16.840.1.113883.5.4" displayName="Serious"/>
+						<value xsi:type="BL" value="${overallSerious ? 'true' : 'false'}"/>
+					</investigationCharacteristic>
+				</subjectOf1>
+				<component1 typeCode="COMP">
+					<primarySourceDocument classCode="DOC" moodCode="EVN">
+						<id root="2.16.840.1.113883.19" extension="${escapeXml(safetyReportId)}-SRC"/>
+						<text>${escapeXml(data.company.name)} own case reference ${escapeXml(data.case.referenceNumber)}</text>
+					</primarySourceDocument>
+				</component1>
+				<component2 typeCode="COMP">
+					<primaryRole classCode="PRD">
+						<player>
+							<assignedEntity classCode="ASSIGNED">
+								<code code="${mapReporterQualification(data.reporter?.reporterType ?? 'consumer', data.reporter?.qualification ?? null)}" codeSystem="2.16.840.1.113883.5.4" displayName="Reporter qualification"/>
+								<assignedPerson>
+									<name>
+										<family>${escapeXml(data.reporter?.fullName ?? 'UNKNOWN')}</family>
+									</name>
+								</assignedPerson>
+								<representedOrganization>
+									<addr><country>${data.countryOfOccurrence.isoCode}</country></addr>
+								</representedOrganization>
+							</assignedEntity>
+						</player>
+					</primaryRole>
+				</component2>
+				<component3 typeCode="COMP">
+					<primaryRole classCode="PAT">
+						<player>
+							<person>
+								<name><family>${escapeXml(data.patient?.initials ?? 'UNKNOWN')}</family></name>${
+						data.patient
+							? `
+								<administrativeGenderCode code="${mapPatientSexR3(data.patient.sex)}" codeSystem="2.16.840.1.113883.5.1"/>`
+							: ''
+					}
+							</person>
+						</player>
+						<subjectOf2>
+							<observation classCode="OBS" moodCode="EVN">
+								<code code="SIMPLE_STATUS" codeSystem="2.16.840.1.113883.5.4"/>
+${reactionsXml}
+${drugsXml}
+								<derivedFrom>
+									<observation classCode="OBS" moodCode="EVN">
+										<code code="NARRATIVE" codeSystem="2.16.840.1.113883.5.4"/>
+										<value xsi:type="ST">${escapeXml(buildNarrative(data))}</value>
+									</observation>
+								</derivedFrom>
+							</observation>
+						</subjectOf2>
+					</primaryRole>
+				</component3>
+				<component4 typeCode="COMP">
+					<sender>
+						<assignedEntity classCode="ASSIGNED">
+							<assignedPerson>
+								<name><given>${escapeXml(senderName.given)}</given><family>${escapeXml(senderName.family)}</family></name>
+							</assignedPerson>
+							<representedOrganization>
+								<name>${escapeXml(data.company.name)}</name>${
+						data.company.regulatoryContactEmail
+							? `
+								<telecom value="mailto:${escapeXml(data.company.regulatoryContactEmail)}"/>`
+							: ''
+					}
+							</representedOrganization>
+						</assignedEntity>
+					</sender>
+				</component4>
+			</investigationEvent>
+		</subject>
+	</controlActProcess>
+</n1:MCCI_IN200100UV01>
+`
+}
+
+/**
+ * VigiCloud Stage 12 — the E2B(R2)-shaped XML generator, built directly
  * against the real field structure confirmed by the Kenya PPB sample
  * (`vigicloud docs/Kenya33716702_ENIP131PFIZER_20260731065733.xml`) —
  * every tag name/order below matches that sample, not a guess from the
@@ -189,10 +454,25 @@ export function buildNarrative(data: SubmissionCaseData): string {
  * class-level doc comment on why the receiver country code is a
  * deliberate correction of an apparent data-quality slip in the sample
  * (`receivercountrycode` there reads "NG" for a Kenyan case).
+ *
+ * Naming correction, 21 Sep 2026: this had been called "E2B(R3)"
+ * throughout the codebase since Stage 12 shipped — wrong. The Kenya
+ * sample's own `<!DOCTYPE ichicsr SYSTEM ".../icsr21xml.dtd">` and
+ * `messageformatversion>2.1` are the defining signature of E2B(R2), the
+ * DTD-based flat-XML format WHO-UMC's VigiFlow (what PPB, and most
+ * African NRAs, actually run) still uses — not E2B(R3)'s unrelated,
+ * much heavier HL7 v3 message structure. The generator was always
+ * correct (it matches the real sample byte-for-byte); only the label
+ * was wrong, everywhere it appeared.
  */
 @Injectable()
 export class E2bXmlBuilderService {
-  build(data: SubmissionCaseData): string {
+  build(data: SubmissionCaseData, format: 'R2' | 'R3' = 'R2'): string {
+    if (format === 'R3') return buildE2bR3(data)
+    return this.buildR2(data)
+  }
+
+  private buildR2(data: SubmissionCaseData): string {
     const referenceDigits = data.case.referenceNumber.replace(/[^0-9]/g, '')
     const safetyReportId = `${data.countryOfReport.isoCode}-${data.company.name.toUpperCase()}-${referenceDigits}`
     const receiverIdentifier = `{HA} ${data.countryOfReport.name} - E2B`

@@ -10,6 +10,7 @@ import { CreateClinicalTrialDto } from './dto/create-clinical-trial.dto'
 import { EnrollTrialSubjectDto } from './dto/enroll-trial-subject.dto'
 import { ListClinicalTrialSubjectsQueryDto } from './dto/list-clinical-trial-subjects-query.dto'
 import { ListClinicalTrialsQueryDto } from './dto/list-clinical-trials-query.dto'
+import { RenewClinicalTrialApprovalDto } from './dto/renew-clinical-trial-approval.dto'
 import { RevealTreatmentArmDto } from './dto/reveal-treatment-arm.dto'
 import { UpdateClinicalTrialDto } from './dto/update-clinical-trial.dto'
 
@@ -69,6 +70,17 @@ export class ClinicalTrialController {
     @Req() req: Request,
   ) {
     return this.clinicalTrialService.enrollSubject(user, id, dto, { ip: req.ip })
+  }
+
+  @RequirePermissions('pv.manage_clinical_trials')
+  @Post(':id/renew-approval')
+  renewApproval(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RenewClinicalTrialApprovalDto,
+    @Req() req: Request,
+  ) {
+    return this.clinicalTrialService.renewApproval(user, id, dto, { ip: req.ip })
   }
 
   @RequirePermissions('pv.unblind_treatment')

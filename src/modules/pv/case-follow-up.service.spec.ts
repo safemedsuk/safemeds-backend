@@ -122,6 +122,9 @@ function buildHarness(opts: { consentGranted?: boolean; triageRoleKeys?: string[
     user: createTable(),
     company: createTable(),
     task: createTable(),
+    document: createTable(),
+    workflowInstance: createTable(),
+    workflowState: createTable(),
   }
 
   tables.company.rows.set('company-1', { id: 'company-1', status: 'active' })
@@ -317,6 +320,39 @@ function seedCase(
   return tables.case.rows.get(id) as Row
 }
 
+/**
+ * Real-usage request, 22 Sep 2026 (item 18) — a minimal `WorkflowInstance`
+ * fixture for `reopenCaseToTriage()`'s own read. `currentState` is
+ * embedded directly on the row (rather than relying on this file's mock
+ * `findFirst` to honor a real Prisma `include`, which it doesn't) —
+ * exactly matching how the real row would come back with `include:
+ * { currentState: true }`.
+ */
+function seedWorkflowInstance(
+  tables: ReturnType<typeof buildHarness>['tables'],
+  caseId: string,
+  stateKey: string,
+) {
+  tables.workflowInstance.rows.set(`instance-${caseId}`, {
+    id: `instance-${caseId}`,
+    recordType: 'pv_case',
+    recordId: caseId,
+    definitionId: 'def-1',
+    currentStateId: `state-${stateKey}`,
+    currentState: { stateKey },
+  })
+  tables.workflowState.rows.set(`state-${stateKey}`, {
+    id: `state-${stateKey}`,
+    definitionId: 'def-1',
+    stateKey,
+  })
+  tables.workflowState.rows.set('state-triage', {
+    id: 'state-triage',
+    definitionId: 'def-1',
+    stateKey: 'triage',
+  })
+}
+
 describe('CaseFollowUpService', () => {
   describe('start()', () => {
     it('with consent + a reporter email: opens an email attempt and emails the reporter directly', async () => {
@@ -502,6 +538,76 @@ describe('CaseFollowUpService', () => {
       const openTasks = [...tables.task.rows.values()].filter((t) => t.status === 'open')
       expect(openTasks).toHaveLength(1)
       expect(openTasks[0].title).toContain('new information received')
+    })
+  })
+
+  describe('real-usage request, 22 Sep 2026 (item 18) — document attachment + reopen-to-Triage on new information', () => {
+    it('rejects a documentId that does not belong to this company', async () => {
+      const { service, tables } = buildHarness({ consentGranted: true })
+      seedCase(tables)
+      const followUp = await service.start(actor, 'case-1', {})
+
+      await expect(
+        service.logAttempt(actor, followUp.id, { outcome: 'responded_resolved', documentId: 'doc-missing' }, {}),
+      ).rejects.toThrow(NotFoundException)
+    })
+
+    it('attaches a real, company-scoped document to the logged attempt', async () => {
+      const { service, tables } = buildHarness({ consentGranted: true })
+      seedCase(tables)
+      tables.document.rows.set('doc-1', { id: 'doc-1', companyId: 'company-1' })
+      const followUp = await service.start(actor, 'case-1', {})
+
+      const result = await service.logAttempt(
+        actor,
+        followUp.id,
+        { outcome: 'responded_new_information', documentId: 'doc-1', note: 'Reporter sent a discharge letter' },
+        {},
+      )
+      expect(result.attempts[0].documentId).toBe('doc-1')
+    })
+
+    it('moves the case back to Triage & Seriousness when new information arrives on a case that had already progressed further', async () => {
+      const { service, tables, auditLog } = buildHarness({ consentGranted: true })
+      seedCase(tables)
+      seedWorkflowInstance(tables, 'case-1', 'quality_check')
+      const followUp = await service.start(actor, 'case-1', {})
+
+      await service.logAttempt(actor, followUp.id, { outcome: 'responded_new_information' }, {})
+
+      const instance = tables.workflowInstance.rows.get('instance-case-1') as Row
+      expect(instance.currentStateId).toBe('state-triage')
+      expect((tables.case.rows.get('case-1') as Row).status).toBe('triage')
+      expect(auditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'pv_case_reopened_for_follow_up', recordId: 'case-1' }),
+      )
+    })
+
+    it('leaves a case already at Intake or Triage alone — nothing further back to reopen', async () => {
+      const { service, tables } = buildHarness({ consentGranted: true })
+      seedCase(tables)
+      seedWorkflowInstance(tables, 'case-1', 'triage')
+      const followUp = await service.start(actor, 'case-1', {})
+
+      await service.logAttempt(actor, followUp.id, { outcome: 'responded_new_information' }, {})
+
+      const instance = tables.workflowInstance.rows.get('instance-case-1') as Row
+      expect(instance.currentStateId).toBe('state-triage') // unchanged, not a fresh write
+    })
+
+    it('is a safe no-op when the case has no workflow instance at all (e.g. an older fixture)', async () => {
+      const { service, tables } = buildHarness({ consentGranted: true })
+      seedCase(tables)
+      const followUp = await service.start(actor, 'case-1', {})
+
+      const result = await service.logAttempt(
+        actor,
+        followUp.id,
+        { outcome: 'responded_new_information' },
+        {},
+      )
+      expect(result.status).toBe('pending_attempt_1')
     })
   })
 

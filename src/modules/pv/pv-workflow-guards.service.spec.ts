@@ -26,10 +26,10 @@ const baseCtx = {
 }
 
 describe('PvWorkflowGuards', () => {
-  it('registers exactly five guards — intake source-document, intake validity-gate, medical_review causality, narrative four-eyes, submitted close-obligations', () => {
+  it('registers exactly six guards — intake source-document, intake validity-gate, medical_review causality, narrative four-eyes, narrative reject-reason, submitted close-obligations', () => {
     const { register } = buildHarness()
 
-    expect(register).toHaveBeenCalledTimes(5)
+    expect(register).toHaveBeenCalledTimes(6)
     expect(register).toHaveBeenNthCalledWith(1, PV_CASE_RECORD_TYPE, 'intake', expect.any(Function))
     expect(register).toHaveBeenNthCalledWith(2, PV_CASE_RECORD_TYPE, 'intake', expect.any(Function))
     expect(register).toHaveBeenNthCalledWith(
@@ -46,6 +46,12 @@ describe('PvWorkflowGuards', () => {
     )
     expect(register).toHaveBeenNthCalledWith(
       5,
+      PV_CASE_RECORD_TYPE,
+      'narrative',
+      expect.any(Function),
+    )
+    expect(register).toHaveBeenNthCalledWith(
+      6,
       PV_CASE_RECORD_TYPE,
       'submitted',
       expect.any(Function),
@@ -227,10 +233,54 @@ describe('PvWorkflowGuards', () => {
     })
   })
 
+  describe('reject-reason guard (real-usage request, 22 Sep 2026)', () => {
+    it('disallows Narrative → Medical Review with no note', async () => {
+      const { register } = buildHarness()
+      const guard = register.mock.calls[4][2] as TransitionGuardFn
+
+      const result = await guard({ tx: {} as never, ...baseCtx, toStateKey: 'medical_review' })
+
+      expect(result.allowed).toBe(false)
+      expect(result.reason).toMatch(/reason is required/i)
+    })
+
+    it('disallows Narrative → Medical Review with a blank/whitespace-only note', async () => {
+      const { register } = buildHarness()
+      const guard = register.mock.calls[4][2] as TransitionGuardFn
+
+      const result = await guard({ tx: {} as never, ...baseCtx, toStateKey: 'medical_review', note: '   ' })
+
+      expect(result.allowed).toBe(false)
+    })
+
+    it('allows Narrative → Medical Review once a real note is given', async () => {
+      const { register } = buildHarness()
+      const guard = register.mock.calls[4][2] as TransitionGuardFn
+
+      const result = await guard({
+        tx: {} as never,
+        ...baseCtx,
+        toStateKey: 'medical_review',
+        note: 'Narrative omits the actual outcome date — send back to confirm.',
+      })
+
+      expect(result).toEqual({ allowed: true })
+    })
+
+    it('never gates the unrelated Narrative → Quality Check approval path', async () => {
+      const { register } = buildHarness()
+      const guard = register.mock.calls[4][2] as TransitionGuardFn
+
+      const result = await guard({ tx: {} as never, ...baseCtx, toStateKey: 'quality_check' })
+
+      expect(result).toEqual({ allowed: true })
+    })
+  })
+
   describe('close-obligations guard (workflow-map stage 9)', () => {
     it('disallows closing while a follow-up cycle is still open', async () => {
       const { register } = buildHarness()
-      const guard = register.mock.calls[4][2] as TransitionGuardFn
+      const guard = register.mock.calls[5][2] as TransitionGuardFn
 
       const caseFollowUpFindFirst = jest
         .fn()
@@ -255,7 +305,7 @@ describe('PvWorkflowGuards', () => {
 
     it('disallows closing while a possible-duplicate review is unresolved, on either side of the pairing', async () => {
       const { register } = buildHarness()
-      const guard = register.mock.calls[4][2] as TransitionGuardFn
+      const guard = register.mock.calls[5][2] as TransitionGuardFn
 
       const duplicateReviewFindFirst = jest
         .fn()
@@ -280,7 +330,7 @@ describe('PvWorkflowGuards', () => {
 
     it('allows closing once there is no open follow-up and no unresolved duplicate review', async () => {
       const { register } = buildHarness()
-      const guard = register.mock.calls[4][2] as TransitionGuardFn
+      const guard = register.mock.calls[5][2] as TransitionGuardFn
 
       const tx = {
         caseFollowUp: { findFirst: jest.fn().mockResolvedValue(null) },

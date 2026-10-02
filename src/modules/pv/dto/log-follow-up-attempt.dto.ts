@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { IsIn, IsOptional, IsString } from 'class-validator'
+import { IsIn, IsOptional, IsString, IsUUID } from 'class-validator'
 
 /** A staff member's real-world outcome for whichever follow-up attempt is currently pending — never `pending` itself, that's the system's own starting state, not something a human "logs." */
 export type LoggableFollowUpOutcome =
@@ -21,4 +21,12 @@ export class LogFollowUpAttemptDto {
   @IsOptional()
   @IsString()
   note?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Real-usage request, 22 Sep 2026 (item 18) — a document the reporter sent as part of this response. Upload it first via the generic documents endpoint, then pass the resulting document id here.',
+  })
+  @IsOptional()
+  @IsUUID()
+  documentId?: string
 }

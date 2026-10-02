@@ -18,6 +18,7 @@ import { CreateClinicalTrialDto } from './dto/create-clinical-trial.dto'
 import { EnrollTrialSubjectDto } from './dto/enroll-trial-subject.dto'
 import { ListClinicalTrialSubjectsQueryDto } from './dto/list-clinical-trial-subjects-query.dto'
 import { ListClinicalTrialsQueryDto } from './dto/list-clinical-trials-query.dto'
+import { RenewClinicalTrialApprovalDto } from './dto/renew-clinical-trial-approval.dto'
 import { RevealTreatmentArmDto } from './dto/reveal-treatment-arm.dto'
 import { UpdateClinicalTrialDto } from './dto/update-clinical-trial.dto'
 
@@ -31,12 +32,31 @@ export const CLINICAL_TRIAL_SUBJECT_RECORD_TYPE = 'clinical_trial_subject'
 /** An annual renewal (line listing + DSUR, per Stage 14's own build-spec text) is due roughly a year after the trial started, or a year after the last reminder — same interval-from-last-event shape as Stage 2's quarterly product reminder. */
 const ANNUAL_RENEWAL_INTERVAL_DAYS = 365
 
+/** Same 60-day warning window `SdeaService.getStatusForDistributor()` already established for a distributor agreement's own expiry. */
+const APPROVAL_EXPIRY_WARNING_DAYS = 60
+
+export type ApprovalStatus = 'valid' | 'expiring' | 'expired' | 'no_expiry' | 'missing'
+
+function computeApprovalStatus(documentId: string | null, expiryDate: Date | null): ApprovalStatus {
+  if (!documentId) return 'missing'
+  if (!expiryDate) return 'no_expiry'
+  const now = new Date()
+  if (expiryDate < now) return 'expired'
+  const warningCutoff = new Date()
+  warningCutoff.setDate(warningCutoff.getDate() + APPROVAL_EXPIRY_WARNING_DAYS)
+  if (expiryDate < warningCutoff) return 'expiring'
+  return 'valid'
+}
+
 export type ClinicalTrialWithSummary = ClinicalTrial & {
   /** Cases linked to this trial not yet in the workflow's one terminal state (`submitted`) — the "open SAEs" half of Stage 14's own "trial-level dashboard" requirement. Uses the same denormalized `Case.status` column `PvCaseService.list()` already trusts for query performance. */
   openSaeCaseCount: number
   subjectCount: number
   /** Best-effort estimate for display — the real due-ness check (`ClinicalTrialAnnualReminderService`) derives from `Task` history the same way Stage 2's reminder does; this mirrors that logic for a single trial rather than duplicating a scan. */
   annualRenewalDueAt: Date
+  /** Real-usage request, 22 Sep 2026 (items 19/20) — computed live, never stored, matching `TrainingModule`'s own `computedStatus` precedent. */
+  regulatoryApprovalStatus: ApprovalStatus
+  ethicsApprovalStatus: ApprovalStatus
 }
 
 export type ClinicalTrialSubjectWithoutSecret = Omit<
@@ -93,6 +113,19 @@ export class ClinicalTrialService {
         })
       }
 
+      await this.requireCompanyDocument(
+        tx,
+        companyId,
+        dto.regulatoryApprovalDocumentId,
+        'regulatory-authority approval',
+      )
+      await this.requireCompanyDocument(
+        tx,
+        companyId,
+        dto.ethicsApprovalDocumentId,
+        'ethics-committee approval',
+      )
+
       const created = await tx.clinicalTrial.create({
         data: {
           id: newId(),
@@ -107,6 +140,16 @@ export class ClinicalTrialService {
           clinicalTrialPortalReference: dto.clinicalTrialPortalReference ?? null,
           countryId: dto.countryId,
           startDate: new Date(dto.startDate),
+          regulatoryApprovalDocumentId: dto.regulatoryApprovalDocumentId,
+          regulatoryApprovalDate: new Date(dto.regulatoryApprovalDate),
+          regulatoryApprovalExpiryDate: dto.regulatoryApprovalExpiryDate
+            ? new Date(dto.regulatoryApprovalExpiryDate)
+            : null,
+          ethicsApprovalDocumentId: dto.ethicsApprovalDocumentId,
+          ethicsApprovalDate: new Date(dto.ethicsApprovalDate),
+          ethicsApprovalExpiryDate: dto.ethicsApprovalExpiryDate
+            ? new Date(dto.ethicsApprovalExpiryDate)
+            : null,
         },
       })
 
@@ -311,6 +354,85 @@ export class ClinicalTrialService {
     })
   }
 
+  /**
+   * Real-usage request, 22 Sep 2026 (item 20) — renews either approval
+   * as its own distinct, audited action, never a silent field overwrite
+   * via the generic `update()`/`PATCH`. Gated the same as `create()`
+   * (`pv.manage_clinical_trials`), since this is the same trust level as
+   * setting the approval in the first place.
+   */
+  async renewApproval(
+    actor: AuthenticatedUser,
+    id: string,
+    dto: RenewClinicalTrialApprovalDto,
+    meta: RequestMeta,
+  ): Promise<ClinicalTrial> {
+    const companyId = requireCompany(actor)
+
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const existing = await tx.clinicalTrial.findFirst({ where: { id, companyId } })
+      if (!existing) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Clinical trial not found' })
+      }
+
+      await this.requireCompanyDocument(
+        tx,
+        companyId,
+        dto.documentId,
+        dto.approvalType === 'regulatory' ? 'regulatory-authority approval' : 'ethics-committee approval',
+      )
+
+      const data =
+        dto.approvalType === 'regulatory'
+          ? {
+              regulatoryApprovalDocumentId: dto.documentId,
+              regulatoryApprovalDate: new Date(dto.approvalDate),
+              regulatoryApprovalExpiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
+            }
+          : {
+              ethicsApprovalDocumentId: dto.documentId,
+              ethicsApprovalDate: new Date(dto.approvalDate),
+              ethicsApprovalExpiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
+            }
+
+      const updated = await tx.clinicalTrial.update({ where: { id }, data })
+
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'clinical_trial_approval_renewed',
+        recordType: CLINICAL_TRIAL_RECORD_TYPE,
+        recordId: id,
+        oldValue: {
+          approvalType: dto.approvalType,
+          previousDocumentId:
+            dto.approvalType === 'regulatory'
+              ? existing.regulatoryApprovalDocumentId
+              : existing.ethicsApprovalDocumentId,
+        },
+        newValue: { approvalType: dto.approvalType, documentId: dto.documentId, approvalDate: dto.approvalDate },
+        ip: meta.ip,
+      })
+
+      return updated
+    })
+  }
+
+  private async requireCompanyDocument(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    documentId: string,
+    label: string,
+  ): Promise<void> {
+    const document = await tx.document.findFirst({ where: { id: documentId, companyId } })
+    if (!document) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: `${label} document not found for this company — upload it first via the documents endpoint`,
+      })
+    }
+  }
+
   /** Used only by `ClinicalTrialSubjectImporter` — resolves a trial by its own reference number within the actor's company, since a bulk-import row names the trial by that human-readable reference, not its internal id. */
   async findTrialByReference(
     actor: AuthenticatedUser,
@@ -442,7 +564,20 @@ export class ClinicalTrialService {
       renewalAnchor.getTime() + ANNUAL_RENEWAL_INTERVAL_DAYS * 24 * 60 * 60 * 1000,
     )
 
-    return { ...trial, openSaeCaseCount, subjectCount, annualRenewalDueAt }
+    return {
+      ...trial,
+      openSaeCaseCount,
+      subjectCount,
+      annualRenewalDueAt,
+      regulatoryApprovalStatus: computeApprovalStatus(
+        trial.regulatoryApprovalDocumentId,
+        trial.regulatoryApprovalExpiryDate,
+      ),
+      ethicsApprovalStatus: computeApprovalStatus(
+        trial.ethicsApprovalDocumentId,
+        trial.ethicsApprovalExpiryDate,
+      ),
+    }
   }
 
   /**

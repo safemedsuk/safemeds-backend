@@ -19,4 +19,15 @@ export class ListGeneratedReportsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(ReportStatus)
   status?: ReportStatus
+
+  /** Real-usage request, 22 Sep 2026 (item 22) — e.g. finding every report generated for a specific signal. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  recordType?: string
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  recordId?: string
 }

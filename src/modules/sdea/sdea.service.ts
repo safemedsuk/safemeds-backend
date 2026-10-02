@@ -73,6 +73,7 @@ export class SdeaService {
           counterpartyName: dto.counterpartyName,
           templateUsed: dto.templateUsed ?? null,
           version: nextVersion,
+          receivedDate: dto.receivedDate ? new Date(dto.receivedDate) : null,
           effectiveDate: dto.effectiveDate ? new Date(dto.effectiveDate) : null,
           expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
           createdBy: actor.sub,

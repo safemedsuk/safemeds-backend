@@ -394,6 +394,39 @@ describe('VigiCloud Stage 18 — Reporting & Periodic Outputs (e2e)', () => {
       const dashboard = await authed(request(httpServer(app)).get('/api/v1/reporting/dashboard'), qppv).expect(200)
       expect(dashboard.body.data.rmpRenewalsDue).toBe(0) // due date is >90 days out
     })
+
+    it('real-usage request, 22 Sep 2026 (item 8) — bulk-imports RMPs for several existing products via the generic Stage 0.6 importer framework', async () => {
+      const productOneId = await createProduct({ brandName: 'BulkRmpProductOne' })
+      const productTwoId = await createProduct({ brandName: 'BulkRmpProductTwo' })
+
+      const csvText =
+        'Product Brand Name,RMP Title,Summary,Next Renewal Due\n' +
+        'BulkRmpProductOne,BulkRmpProductOne RMP v1,Standard risk minimisation measures,2027-01-01\n' +
+        'BulkRmpProductTwo,BulkRmpProductTwo RMP v1,Standard risk minimisation measures,2027-06-01\n' +
+        'NoSuchProduct,Should fail,,\n'
+
+      const preview = await authedWrite(request(httpServer(app)).post('/api/v1/bulk-import/risk_management_plan/preview'), qppv)
+        .send({ csvText })
+        .expect(201)
+      const validRows = preview.body.data.validRows as { data: Record<string, string> }[]
+      expect(validRows).toHaveLength(3) // "NoSuchProduct" passes row-shape validation — it only fails at commit, resolving the product
+
+      const commit = await authedWrite(request(httpServer(app)).post('/api/v1/bulk-import/risk_management_plan/commit'), qppv)
+        .send({ rows: validRows.map((r) => r.data) })
+        .expect(201)
+      expect(commit.body.data.committed).toBe(2)
+      expect(commit.body.data.failed).toHaveLength(1)
+      expect(commit.body.data.failed[0].error).toMatch(/No active product found/)
+
+      const rmpsForOne = await authed(request(httpServer(app)).get(`/api/v1/rmp?productId=${productOneId}`), qppv).expect(200)
+      expect(rmpsForOne.body.data).toHaveLength(1)
+      expect(rmpsForOne.body.data[0].title).toBe('BulkRmpProductOne RMP v1')
+      expect(rmpsForOne.body.data[0].status).toBe('draft') // never auto-activated
+
+      const rmpsForTwo = await authed(request(httpServer(app)).get(`/api/v1/rmp?productId=${productTwoId}`), qppv).expect(200)
+      expect(rmpsForTwo.body.data).toHaveLength(1)
+      expect(rmpsForTwo.body.data[0].title).toBe('BulkRmpProductTwo RMP v1')
+    })
   })
 
   describe('Safety Alerts & Letters', () => {

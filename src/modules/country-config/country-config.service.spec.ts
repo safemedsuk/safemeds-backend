@@ -423,7 +423,7 @@ describe('CountryConfigService — submission formats', () => {
       {
         authorityId: 'ppb',
         reportTypeId: 'adr',
-        templateRef: 'E2B(R3)',
+        templateRef: 'E2B(R2)',
         channel: 'vigiflow',
         effectiveFrom: '2026-01-01',
       },

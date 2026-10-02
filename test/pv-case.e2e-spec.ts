@@ -214,7 +214,7 @@ describe('VigiCloud Stage 1 — PV Case (e2e)', () => {
       .send(buildCasePayload({}, { reportTypeId, countryId }))
       .expect(201)
 
-    expect(created.body.data.referenceNumber).toMatch(/^PV-\d{4}-\d{5}$/)
+    expect(created.body.data.referenceNumber).toMatch(/^[A-Z]{3}-\d{4}-[A-Z]{3}-\d{5}$/)
     const caseId = created.body.data.id as string
 
     const fetched = await authed(

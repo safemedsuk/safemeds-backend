@@ -101,6 +101,25 @@ describe('SdeaService', () => {
       expect(sdea.status).toBe('draft')
     })
 
+    it("tracks receivedDate distinct from effectiveDate/expiryDate (real-usage request, 22 Sep 2026, item 5)", async () => {
+      const { service } = buildHarness()
+      const sdea = await service.create(
+        actor,
+        {
+          distributorId: 'dist-1',
+          title: 'Meridian SDEA',
+          counterpartyName: 'Meridian Pharma',
+          receivedDate: '2026-09-01',
+          effectiveDate: '2026-09-15',
+          expiryDate: '2027-09-15',
+        },
+        {},
+      )
+      expect(sdea.receivedDate).toEqual(new Date('2026-09-01'))
+      expect(sdea.effectiveDate).toEqual(new Date('2026-09-15'))
+      expect(sdea.expiryDate).toEqual(new Date('2027-09-15'))
+    })
+
     it('404s on an unknown distributor', async () => {
       const { service } = buildHarness()
       await expect(

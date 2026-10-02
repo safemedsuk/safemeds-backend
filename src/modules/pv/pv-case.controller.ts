@@ -5,6 +5,7 @@ import type { Request } from 'express'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { GenerateRegulatorySubmissionDto } from '../regulatory-submission/dto/generate-regulatory-submission.dto'
 import { RegulatorySubmissionService } from '../regulatory-submission/regulatory-submission.service'
 import { CaseFollowUpService } from './case-follow-up.service'
 import { CausalityService } from './causality.service'
@@ -24,6 +25,7 @@ import {
 import { LinkSourceDocumentDto } from './dto/link-source-document.dto'
 import { ListPvCasesQueryDto } from './dto/list-pv-cases-query.dto'
 import { MarkRedactedDto } from './dto/mark-redacted.dto'
+import { RejectDraftDto } from './dto/reject-draft.dto'
 import { DuplicateDetectionService } from './duplicate-detection.service'
 import { ExpectednessService } from './expectedness.service'
 import { PvCaseService } from './pv-case.service'
@@ -155,6 +157,18 @@ export class PvCaseController {
     @Req() req: Request,
   ) {
     return this.pvCaseService.releaseDraft(user, id, { ip: req.ip })
+  }
+
+  /** Real-usage request, 22 Sep 2026 (item 13) — the reviewer's other option besides confirming: this draft never should have become a case. Requires a claim first, exactly like `confirmDraft()`. */
+  @RequirePermissions('pv.triage_case')
+  @Post(':id/reject-draft')
+  rejectDraft(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RejectDraftDto,
+    @Req() req: Request,
+  ) {
+    return this.pvCaseService.rejectDraft(user, id, dto, { ip: req.ip })
   }
 
   /**
@@ -292,7 +306,7 @@ export class PvCaseController {
   }
 
   /**
-   * VigiCloud Stage 12 — generates a real E2B(R3) XML + human-readable
+   * VigiCloud Stage 12 — generates a real E2B(R2) XML + human-readable
    * PDF for a case that has cleared QC review (`submission_ready`).
    * Gated by `pv.sign_icsr` — the permission seeded from day one
    * specifically for "sign and approve an ICSR submission," held only by
@@ -304,9 +318,10 @@ export class PvCaseController {
   generateRegulatorySubmission(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
+    @Body() dto: GenerateRegulatorySubmissionDto,
     @Req() req: Request,
   ) {
-    return this.regulatorySubmissionService.generate(user, id, { ip: req.ip })
+    return this.regulatorySubmissionService.generate(user, id, { ip: req.ip }, dto.format ?? 'R2')
   }
 
   /** VigiCloud Stage 12 — every generated submission attempt for this case, newest first. */

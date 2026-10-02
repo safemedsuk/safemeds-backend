@@ -202,6 +202,33 @@ describe('RegulatorySubmissionService.generate()', () => {
     const second = await service.generate(actor, 'case-1', {})
     expect(second.submissionNumber).toBe(2)
   })
+
+  it('defaults to R2 when no format is given, and records it on the row', async () => {
+    const { service, xmlBuild, regulatorySubmissionRows } = buildHarness()
+    const result = await service.generate(actor, 'case-1', {})
+    expect(xmlBuild).toHaveBeenCalledWith(expect.anything(), 'R2')
+    expect(regulatorySubmissionRows.get(result.id)?.format).toBe('R2')
+  })
+
+  it('threads an explicit R3 choice through to the XML builder and the stored row (real-usage request, 22 Sep 2026, item 25)', async () => {
+    const { service, xmlBuild, regulatorySubmissionRows } = buildHarness()
+    const result = await service.generate(actor, 'case-1', {}, 'R3')
+    expect(xmlBuild).toHaveBeenCalledWith(expect.anything(), 'R3')
+    expect(regulatorySubmissionRows.get(result.id)?.format).toBe('R3')
+  })
+
+  it('names the generated XML file with the chosen format', async () => {
+    const { service, uploadDirect } = buildHarness()
+    await service.generate(actor, 'case-1', {}, 'R3')
+    expect(uploadDirect).toHaveBeenCalledWith(
+      actor,
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ originalname: expect.stringContaining('E2B(R3)') }),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
 })
 
 describe('RegulatorySubmissionService.attachEvidence()', () => {

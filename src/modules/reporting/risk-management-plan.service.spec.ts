@@ -40,6 +40,17 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
           (rowValue as Date) <= (value as { lte: Date }).lte
         )
       }
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        'equals' in (value as Record<string, unknown>)
+      ) {
+        const clause = value as { equals: string; mode?: string }
+        const rowValue = typeof row[key] === 'string' ? (row[key]) : ''
+        return clause.mode === 'insensitive'
+          ? rowValue.toLowerCase() === clause.equals.toLowerCase()
+          : rowValue === clause.equals
+      }
       return row[key] === value
     })
   }
@@ -367,6 +378,40 @@ describe('RiskManagementPlanService', () => {
       })
 
       await expect(service.countRenewalsDue('company-1')).resolves.toBe(1)
+    })
+  })
+
+  describe('findProductByBrandName() (real-usage request, 22 Sep 2026, item 8)', () => {
+    it('matches a real, active product by brand name, case-insensitively', async () => {
+      const { service, tables } = buildHarness()
+      tables.product.rows.set('product-1', {
+        id: 'product-1',
+        companyId: 'company-1',
+        brandName: 'Amoxil',
+        isActive: true,
+      })
+
+      const found = await service.findProductByBrandName(actor, 'amoxil')
+      expect(found?.id).toBe('product-1')
+    })
+
+    it('returns null for a product that does not exist', async () => {
+      const { service } = buildHarness()
+      const found = await service.findProductByBrandName(actor, 'Does Not Exist')
+      expect(found).toBeNull()
+    })
+
+    it('never matches a deactivated product', async () => {
+      const { service, tables } = buildHarness()
+      tables.product.rows.set('product-1', {
+        id: 'product-1',
+        companyId: 'company-1',
+        brandName: 'Withdrawn Item',
+        isActive: false,
+      })
+
+      const found = await service.findProductByBrandName(actor, 'Withdrawn Item')
+      expect(found).toBeNull()
     })
   })
 })

@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { paginate, PaginatedResult, resolveSort } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import { DirectUploadFile, DocumentsService } from '../documents/documents.service'
 import { CreateGeneratedReportDto } from './dto/create-generated-report.dto'
 import { ListGeneratedReportsQueryDto } from './dto/list-generated-reports-query.dto'
 
@@ -53,6 +54,7 @@ export class ReportsService {
   constructor(
     private readonly rls: RlsService,
     private readonly auditService: AuditService,
+    private readonly documentsService: DocumentsService,
   ) {}
 
   async create(
@@ -112,6 +114,8 @@ export class ReportsService {
         ...(query.moduleKey ? { moduleKey: query.moduleKey } : {}),
         ...(query.reportTypeKey ? { reportTypeKey: query.reportTypeKey } : {}),
         ...(query.status ? { status: query.status } : {}),
+        ...(query.recordType ? { recordType: query.recordType } : {}),
+        ...(query.recordId ? { recordId: query.recordId } : {}),
       }
 
       const [rows, total] = await Promise.all([
@@ -206,6 +210,56 @@ export class ReportsService {
         recordId: id,
         oldValue: { status: existing.status },
         newValue: { status: updated.status, submittedAt: updated.submittedAt },
+        ip: meta.ip,
+      })
+
+      return updated
+    })
+  }
+
+  /**
+   * Real-usage request, 22 Sep 2026 (item 22) — "clients should be able
+   * to upload proof they submitted the report to the authority." Made
+   * generic here rather than a third copy alongside
+   * `RegulatorySubmissionService.attachEvidence()`/
+   * `PeriodicReportService.attachEvidence()`'s own near-identical
+   * methods (neither is touched — no risk to their own already-shipped
+   * behavior) — any future report type gets this for free. Same
+   * "slow I/O outside any open transaction" discipline as both of
+   * those.
+   */
+  async attachEvidence(
+    actor: AuthenticatedUser,
+    id: string,
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ): Promise<GeneratedReport> {
+    const companyId = requireCompany(actor)
+
+    await this.rls.runAsCompany(companyId, (tx) => this.findOrThrow(tx, companyId, id))
+
+    const upload = await this.documentsService.uploadDirect(
+      actor,
+      'generated_report',
+      id,
+      file,
+      { title: 'Submission Evidence' },
+      meta,
+    )
+
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const updated = await tx.generatedReport.update({
+        where: { id },
+        data: { evidenceDocumentId: upload.document.id },
+      })
+
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'generated_report_evidence_attached',
+        recordType: 'generated_report',
+        recordId: id,
+        newValue: { evidenceDocumentId: upload.document.id },
         ip: meta.ip,
       })
 

@@ -69,6 +69,20 @@ class FakeClinicalTrialSubjectImporter implements Importer {
   }
 }
 
+/** A fourth, differently-permissioned importer — keeps the constructor's real arity honest as more importers register (real-usage request, 22 Sep 2026, item 8's `risk_management_plan`). */
+class FakeRmpImporter implements Importer {
+  importType = 'risk_management_plan'
+  label = 'Bulk import Risk Management Plans'
+  requiredPermission = 'rmp.manage'
+  columns: ImporterColumn[] = [{ key: 'productBrandName', label: 'Product Brand Name', required: true }]
+  validateRow(): string[] {
+    return []
+  }
+  async commitRow(): Promise<void> {
+    await Promise.resolve()
+  }
+}
+
 function buildHarness(grantedPermissions: string[] = ['users.invite', 'master_data.manage']) {
   const auditLog = jest.fn().mockResolvedValue(undefined)
   const auditService = { log: auditLog } as never
@@ -79,6 +93,7 @@ function buildHarness(grantedPermissions: string[] = ['users.invite', 'master_da
   const fakeImporter = new FakeImporter()
   const fakeProductImporter = new FakeProductImporter()
   const fakeClinicalTrialSubjectImporter = new FakeClinicalTrialSubjectImporter()
+  const fakeRmpImporter = new FakeRmpImporter()
   const service = new BulkImportService(
     rls as never,
     auditService,
@@ -86,6 +101,7 @@ function buildHarness(grantedPermissions: string[] = ['users.invite', 'master_da
     fakeImporter as never,
     fakeProductImporter as never,
     fakeClinicalTrialSubjectImporter as never,
+    fakeRmpImporter as never,
   )
   return { service, fakeImporter, fakeProductImporter, auditLog }
 }

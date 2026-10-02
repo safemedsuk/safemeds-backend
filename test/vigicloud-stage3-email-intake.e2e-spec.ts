@@ -153,7 +153,7 @@ describe('VigiCloud Stage 3.3 — Inbound Email Intake (e2e)', () => {
       }
 
       const response = await request(httpServer(appConfigured)).post('/api/v1/webhooks/inbound-email').set(signedHeaders(body)).send(body).expect(201)
-      expect(response.body.data).toEqual({ outcome: 'case_created', referenceNumber: expect.stringMatching(/^PV-\d{4}-\d{5}$/) })
+      expect(response.body.data).toEqual({ outcome: 'case_created', referenceNumber: expect.stringMatching(/^[A-Z]{3}-\d{4}-[A-Z]{3}-\d{5}$/) })
 
       const rawCase = await withBypass((tx) => tx.case.findFirstOrThrow({ where: { companyId, referenceNumber: response.body.data.referenceNumber as string } }))
       expect(rawCase.createdBy).toBeNull()

@@ -1,4 +1,5 @@
 import {
+  buildE2bR3,
   buildNarrative,
   E2bXmlBuilderService,
   formatE2bDate,
@@ -6,6 +7,7 @@ import {
   mapActionTaken,
   mapDrugCharacterization,
   mapPatientSex,
+  mapPatientSexR3,
   mapReactionOutcome,
   mapReporterQualification,
   mapReportType,
@@ -253,6 +255,68 @@ describe('E2bXmlBuilderService.build()', () => {
     expect(xml).not.toContain('reactionmeddrapt')
     expect(xml).not.toContain('reactionmeddrallt')
     expect(xml).not.toContain('reactionstartdate>')
+  })
+})
+
+/**
+ * A stack-based well-formedness check that (unlike `assertBalancedTags`
+ * above) correctly handles self-closing tags, namespace-prefixed names
+ * (`n1:MCCI_IN200100UV01`), and mixed-case names — all real features of
+ * the R3 XML, none of which the R2 builder's own output uses.
+ */
+function assertWellFormedXml(xml: string): void {
+  const tagPattern = /<(\/)?([a-zA-Z0-9_:]+)((?:\s+[^<>]*?)?)(\/)?>/g
+  const stack: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = tagPattern.exec(xml)) !== null) {
+    const [, isClose, name, , selfClose] = match
+    if (isClose) {
+      const expected = stack.pop()
+      expect(expected).toBe(name)
+    } else if (!selfClose) {
+      stack.push(name)
+    }
+  }
+  expect(stack).toEqual([])
+}
+
+describe('buildE2bR3() / build(data, "R3")', () => {
+  const service = new E2bXmlBuilderService()
+
+  it('produces well-formed E2B(R3) XML with the real HL7 v3 message envelope', () => {
+    const xml = service.build(fixture(), 'R3')
+    assertWellFormedXml(xml)
+    expect(xml).toContain('<n1:MCCI_IN200100UV01')
+    expect(xml).toContain('<investigationEvent classCode="INVSTG" moodCode="EVN">')
+  })
+
+  it('carries the real case reporter/product/reaction data into the R3 shape', () => {
+    const xml = buildE2bR3(fixture())
+    expect(xml).toContain('<family>Jane Wanjiru</family>')
+    expect(xml).toContain('<name>Depo-Provera</name>')
+    expect(xml).toContain('MEDROXYPROGESTERONE ACETATE')
+    expect(xml).toContain('codeSystem="2.16.840.1.113883.6.163"')
+    expect(xml).toContain('code="10019211"')
+    expect(xml).toContain('<outcomeCode code="3"')
+  })
+
+  it("builds a real receiver/sender device block from the case's own company/authority", () => {
+    const xml = buildE2bR3(fixture())
+    expect(xml).toContain('{HA} Kenya - E2B')
+    expect(xml).toContain('Demo Pharma Ltd')
+  })
+
+  it('mapPatientSexR3 uses HL7 AdministrativeGender codes, not R2s numeric ones', () => {
+    expect(mapPatientSexR3('male')).toBe('M')
+    expect(mapPatientSexR3('female')).toBe('F')
+    expect(mapPatientSexR3('unknown')).toBe('UN')
+  })
+
+  it('E2bXmlBuilderService.build() defaults to R2 and only produces R3 when explicitly asked', () => {
+    const defaultXml = service.build(fixture())
+    const explicitR2 = service.build(fixture(), 'R2')
+    expect(defaultXml).toBe(explicitR2)
+    expect(defaultXml).not.toContain('MCCI_IN200100UV01')
   })
 })
 

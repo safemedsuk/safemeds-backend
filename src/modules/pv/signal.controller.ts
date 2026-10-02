@@ -12,6 +12,7 @@ import { RecordSignalRecommendationDto } from './dto/record-signal-recommendatio
 import { RecordSignalValidationDto } from './dto/record-signal-validation.dto'
 import { SignalService } from './signal.service'
 import { SignalDetectionService } from './signal-detection.service'
+import { SignalReportService } from './signal-report.service'
 
 @ApiTags('pv-signals')
 @Controller('pv/signals')
@@ -19,6 +20,7 @@ export class SignalController {
   constructor(
     private readonly signalService: SignalService,
     private readonly signalDetectionService: SignalDetectionService,
+    private readonly signalReportService: SignalReportService,
   ) {}
 
   @RequirePermissions('pv.manage_signals')
@@ -95,6 +97,17 @@ export class SignalController {
     @Req() req: Request,
   ) {
     return this.signalService.recordRecommendation(user, id, dto, { ip: req.ip })
+  }
+
+  /** Real-usage request, 22 Sep 2026 (item 22) — generates a real PDF summarizing the signal's full lifecycle to date, tracked via the generic `GeneratedReport` primitive (`GET /reports?recordType=signal&recordId=:id` lists every generation attempt; `POST /reports/:id/evidence` attaches proof of submission to the authority). */
+  @RequirePermissions('pv.manage_signals')
+  @Post(':id/report')
+  generateReport(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
+    return this.signalReportService.generate(user, id, { ip: req.ip })
   }
 
   @RequirePermissions('pv.manage_signals')

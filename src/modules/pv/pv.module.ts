@@ -7,6 +7,7 @@ import { EncryptionModule } from '../../common/encryption/encryption.module'
 import { EnvConfig } from '../../config/env.validation'
 import { AuditModule } from '../audit/audit.module'
 import { ConsentModule } from '../consent/consent.module'
+import { DocumentsModule } from '../documents/documents.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { RecordVersioningModule } from '../record-versioning/record-versioning.module'
 import { RegulatorySubmissionModule } from '../regulatory-submission/regulatory-submission.module'
@@ -28,6 +29,11 @@ import {
 } from './clinical-trial-annual-reminder.processor'
 import { ClinicalTrialAnnualReminderService } from './clinical-trial-annual-reminder.service'
 import { CodingService } from './coding.service'
+import {
+  DRAFT_REVIEW_REMINDER_QUEUE,
+  DraftReviewReminderProcessor,
+} from './draft-review-reminder.processor'
+import { DraftReviewReminderService } from './draft-review-reminder.service'
 import { DuplicateDetectionService } from './duplicate-detection.service'
 import { DuplicateReviewController } from './duplicate-review.controller'
 import {
@@ -56,6 +62,8 @@ import { SignalController } from './signal.controller'
 import { SignalService } from './signal.service'
 import { SIGNAL_DETECTION_QUEUE, SignalDetectionProcessor } from './signal-detection.processor'
 import { SignalDetectionService } from './signal-detection.service'
+import { SignalReportService } from './signal-report.service'
+import { SignalReportPdfService } from './signal-report-pdf.service'
 import { SignalWorkflowGuards } from './signal-workflow-guards.service'
 import { SourceDocumentService } from './source-document.service'
 import { TriageService } from './triage.service'
@@ -95,6 +103,7 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
     AuditModule,
     EncryptionModule,
     ConsentModule,
+    DocumentsModule,
     RecordVersioningModule,
     WorkflowModule,
     RolesModule,
@@ -132,6 +141,11 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
       inject: [ConfigService],
       useFactory: redisConnectionFactory,
     }),
+    BullModule.registerQueueAsync({
+      name: DRAFT_REVIEW_REMINDER_QUEUE,
+      inject: [ConfigService],
+      useFactory: redisConnectionFactory,
+    }),
   ],
   controllers: [
     PvCaseController,
@@ -165,12 +179,16 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
     SignalDetectionService,
     SignalDetectionProcessor,
     SignalWorkflowGuards,
+    SignalReportPdfService,
+    SignalReportService,
     LiteratureMonitoringService,
     LiteratureMonitoringReminderService,
     LiteratureMonitoringReminderProcessor,
     GlobalMoleculeIntelligenceService,
     PhoneReachabilityReminderService,
     PhoneReachabilityReminderProcessor,
+    DraftReviewReminderService,
+    DraftReviewReminderProcessor,
   ],
   exports: [
     PvCaseService,
@@ -199,6 +217,7 @@ export class PvModule implements OnModuleInit {
     private readonly literatureMonitoringReminderQueue: Queue,
     @InjectQueue(PHONE_REACHABILITY_REMINDER_QUEUE)
     private readonly phoneReachabilityReminderQueue: Queue,
+    @InjectQueue(DRAFT_REVIEW_REMINDER_QUEUE) private readonly draftReviewReminderQueue: Queue,
     private readonly configService: ConfigService<EnvConfig, true>,
   ) {}
 
@@ -256,6 +275,17 @@ export class PvModule implements OnModuleInit {
         repeat: { every: 7 * DAILY_SCAN_INTERVAL_MS },
         jobId: 'pv-phone-reachability-reminder-weekly',
       },
+    )
+    // Real-usage request, 22 Sep 2026 (item 13) — a real 24-hour SLA needs
+    // a materially finer scan cadence than the daily/weekly jobs above,
+    // or a case could sit up to a day past due before anyone is
+    // reminded again; `DraftReviewReminderService.scanAndRemind()`'s own
+    // per-case due-ness check still governs exactly when a given draft's
+    // next reminder actually fires.
+    await this.draftReviewReminderQueue.add(
+      'scan',
+      {},
+      { repeat: { every: 60 * 60 * 1000 }, jobId: 'pv-draft-review-reminder-hourly' },
     )
   }
 }

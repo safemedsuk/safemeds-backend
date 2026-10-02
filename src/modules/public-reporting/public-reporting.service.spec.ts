@@ -69,6 +69,13 @@ function buildHarness() {
     ['case-1', { id: 'case-1', companyId: 'company-1', referenceNumber: 'PV-2026-00001' }],
   ])
 
+  const distributors = [
+    { id: 'dist-1', companyId: 'company-1', name: 'Zeta Distributors', status: 'active' },
+    { id: 'dist-2', companyId: 'company-1', name: 'Acme Pharma Distribution', status: 'active' },
+    { id: 'dist-3', companyId: 'company-1', name: 'Retired Distributor', status: 'inactive' },
+    { id: 'dist-4', companyId: 'company-2', name: 'Other Company Distributor', status: 'active' },
+  ]
+
   const tables = {
     company: {
       findFirst: jest
@@ -137,6 +144,18 @@ function buildHarness() {
           },
         ),
     },
+    distributor: {
+      findMany: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { companyId: string; status: string } }) =>
+          Promise.resolve(
+            distributors
+              .filter((d) => d.companyId === where.companyId && d.status === where.status)
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((d) => ({ id: d.id, name: d.name })),
+          ),
+        ),
+    },
   }
   const rls = { runWithSystemAccess: (fn: (tx: typeof tables) => unknown) => fn(tables) }
 
@@ -156,12 +175,16 @@ function buildHarness() {
   const linkSystem = jest.fn().mockResolvedValue({ id: 'source-document-1' })
   const sourceDocumentService = { linkSystem } as never
 
+  const createPublic = jest.fn().mockResolvedValue({ complaintNumber: 'CMP-2026-00001' })
+  const complaintService = { createPublic } as never
+
   const service = new PublicReportingService(
     rls as never,
     pvCaseService,
     mailService,
     documentsService,
     sourceDocumentService,
+    complaintService,
   )
   return {
     service,
@@ -169,6 +192,7 @@ function buildHarness() {
     sendCaseReceivedConfirmation,
     uploadDirectSystem,
     linkSystem,
+    createPublic,
   }
 }
 
@@ -224,6 +248,28 @@ describe('PublicReportingService', () => {
         null,
         { ip: '5.5.5.5' },
       )
+    })
+
+    it("uses the reporter's own countryOfResidenceId for both country fields when given (real-usage request, 22 Sep 2026, item 12)", async () => {
+      const { service, createFromSystemChannel } = buildHarness()
+
+      await service.submit(
+        'fankammeds-inc',
+        { ...baseSubmission, countryOfResidenceId: 'country-cm' },
+        {},
+      )
+
+      const [, dto] = createFromSystemChannel.mock.calls[0]
+      expect(dto.countryOfOccurrenceId).toBe('country-cm')
+      expect(dto.countryOfReportId).toBe('country-cm')
+    })
+
+    it("falls back to the company's home country when countryOfResidenceId is omitted", async () => {
+      const { service, createFromSystemChannel } = buildHarness()
+      await service.submit('fankammeds-inc', baseSubmission, {})
+      const [, dto] = createFromSystemChannel.mock.calls[0]
+      expect(dto.countryOfOccurrenceId).toBe('country-ke')
+      expect(dto.countryOfReportId).toBe('country-ke')
     })
 
     it('defaults awarenessDate/receivedDate to today, in ISO date form', async () => {
@@ -359,6 +405,29 @@ describe('PublicReportingService', () => {
       await expect(service.searchProducts('not-a-real-slug', 'amox')).rejects.toThrow(
         NotFoundException,
       )
+    })
+  })
+
+  describe('listOrganizations() (real-usage request, 22 Sep 2026, item 22)', () => {
+    it('returns only the resolved company\'s own active distributors, alphabetically, name-only', async () => {
+      const { service } = buildHarness()
+      const results = await service.listOrganizations('fankammeds-inc')
+      expect(results).toEqual([
+        { id: 'dist-2', name: 'Acme Pharma Distribution' },
+        { id: 'dist-1', name: 'Zeta Distributors' },
+      ])
+    })
+
+    it('never leaks an inactive distributor or one belonging to a different company', async () => {
+      const { service } = buildHarness()
+      const results = await service.listOrganizations('fankammeds-inc')
+      expect(results.find((d) => d.name === 'Retired Distributor')).toBeUndefined()
+      expect(results.find((d) => d.name === 'Other Company Distributor')).toBeUndefined()
+    })
+
+    it('404s for an unknown slug', async () => {
+      const { service } = buildHarness()
+      await expect(service.listOrganizations('not-a-real-slug')).rejects.toThrow(NotFoundException)
     })
   })
 })

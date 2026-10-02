@@ -118,9 +118,18 @@ function buildHarness(
   const tables = {
     clinicalTrial: createTable(),
     clinicalTrialSubject: createTable(),
+    document: createTable(),
     case: { count: jest.fn().mockResolvedValue(0) },
     task: { findFirst: jest.fn().mockResolvedValue(null) },
   }
+  tables.document.rows.set('doc-reg-approval', {
+    id: 'doc-reg-approval',
+    companyId: 'company-1',
+  })
+  tables.document.rows.set('doc-ethics-approval', {
+    id: 'doc-ethics-approval',
+    companyId: 'company-1',
+  })
 
   const rls = {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
@@ -153,6 +162,10 @@ function baseTrialDto(overrides: Partial<Parameters<ClinicalTrialService['create
     trialName: 'A Study of Panadol in Adults',
     countryId: 'country-1',
     startDate: '2026-01-01',
+    regulatoryApprovalDocumentId: 'doc-reg-approval',
+    regulatoryApprovalDate: '2026-01-01',
+    ethicsApprovalDocumentId: 'doc-ethics-approval',
+    ethicsApprovalDate: '2026-01-01',
     ...overrides,
   }
 }
@@ -182,6 +195,126 @@ describe('ClinicalTrialService', () => {
       await expect(service.create(platformActor, baseTrialDto(), {})).rejects.toThrow(
         ForbiddenException,
       )
+    })
+
+    it('real-usage request, 22 Sep 2026 (item 19) — rejects when the regulatory approval document does not exist for this company', async () => {
+      const { service } = buildHarness()
+      await expect(
+        service.create(actor, baseTrialDto({ regulatoryApprovalDocumentId: 'doc-nonexistent' }), {}),
+      ).rejects.toThrow(NotFoundException)
+    })
+
+    it('real-usage request, 22 Sep 2026 (item 19) — rejects when the ethics-committee approval document does not exist for this company', async () => {
+      const { service } = buildHarness()
+      await expect(
+        service.create(actor, baseTrialDto({ ethicsApprovalDocumentId: 'doc-nonexistent' }), {}),
+      ).rejects.toThrow(NotFoundException)
+    })
+
+    it('real-usage request, 22 Sep 2026 (item 19) — persists both approval documents/dates on the created trial', async () => {
+      const { service } = buildHarness()
+      const result = await service.create(
+        actor,
+        baseTrialDto({ regulatoryApprovalExpiryDate: '2027-01-01' }),
+        {},
+      )
+      expect(result.regulatoryApprovalDocumentId).toBe('doc-reg-approval')
+      expect(result.ethicsApprovalDocumentId).toBe('doc-ethics-approval')
+      expect(result.regulatoryApprovalExpiryDate).toEqual(new Date('2027-01-01'))
+    })
+  })
+
+  describe('renewApproval() (real-usage request, 22 Sep 2026, item 20)', () => {
+    it('renews the regulatory approval as its own audited action', async () => {
+      const { service, tables, auditLog } = buildHarness()
+      const trial = await service.create(actor, baseTrialDto(), {})
+      tables.document.rows.set('doc-reg-renewed', { id: 'doc-reg-renewed', companyId: 'company-1' })
+
+      const updated = await service.renewApproval(
+        actor,
+        trial.id,
+        { approvalType: 'regulatory', documentId: 'doc-reg-renewed', approvalDate: '2027-01-01' },
+        {},
+      )
+
+      expect(updated.regulatoryApprovalDocumentId).toBe('doc-reg-renewed')
+      expect(updated.regulatoryApprovalDate).toEqual(new Date('2027-01-01'))
+      expect(updated.ethicsApprovalDocumentId).toBe('doc-ethics-approval') // untouched
+      expect(auditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'clinical_trial_approval_renewed' }),
+      )
+    })
+
+    it('renews the ethics-committee approval independently of the regulatory one', async () => {
+      const { service, tables } = buildHarness()
+      const trial = await service.create(actor, baseTrialDto(), {})
+      tables.document.rows.set('doc-ethics-renewed', { id: 'doc-ethics-renewed', companyId: 'company-1' })
+
+      const updated = await service.renewApproval(
+        actor,
+        trial.id,
+        { approvalType: 'ethics', documentId: 'doc-ethics-renewed', approvalDate: '2027-06-01', expiryDate: '2028-06-01' },
+        {},
+      )
+
+      expect(updated.ethicsApprovalDocumentId).toBe('doc-ethics-renewed')
+      expect(updated.ethicsApprovalExpiryDate).toEqual(new Date('2028-06-01'))
+      expect(updated.regulatoryApprovalDocumentId).toBe('doc-reg-approval') // untouched
+    })
+
+    it('404s on a nonexistent trial', async () => {
+      const { service } = buildHarness()
+      await expect(
+        service.renewApproval(
+          actor,
+          'trial-nonexistent',
+          { approvalType: 'regulatory', documentId: 'doc-reg-approval', approvalDate: '2027-01-01' },
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException)
+    })
+
+    it('rejects a renewal document that does not exist for this company', async () => {
+      const { service } = buildHarness()
+      const trial = await service.create(actor, baseTrialDto(), {})
+      await expect(
+        service.renewApproval(
+          actor,
+          trial.id,
+          { approvalType: 'regulatory', documentId: 'doc-nonexistent', approvalDate: '2027-01-01' },
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException)
+    })
+  })
+
+  describe('approval status (real-usage request, 22 Sep 2026, items 19/20)', () => {
+    it('flags "no_expiry" for an approval with a document but no expiry date', async () => {
+      const { service } = buildHarness()
+      const trial = await service.create(actor, baseTrialDto(), {})
+      const fetched = await service.get(actor, trial.id)
+      expect(fetched.regulatoryApprovalStatus).toBe('no_expiry')
+      expect(fetched.ethicsApprovalStatus).toBe('no_expiry')
+    })
+
+    it('flags "expired" once the expiry date has passed, and "valid" for a far-future one', async () => {
+      const { service } = buildHarness()
+      const past = new Date()
+      past.setFullYear(past.getFullYear() - 1)
+      const farFuture = new Date()
+      farFuture.setFullYear(farFuture.getFullYear() + 5)
+      const trial = await service.create(
+        actor,
+        baseTrialDto({
+          regulatoryApprovalExpiryDate: past.toISOString().slice(0, 10),
+          ethicsApprovalExpiryDate: farFuture.toISOString().slice(0, 10),
+        }),
+        {},
+      )
+      const fetched = await service.get(actor, trial.id)
+      expect(fetched.regulatoryApprovalStatus).toBe('expired')
+      expect(fetched.ethicsApprovalStatus).toBe('valid')
     })
   })
 

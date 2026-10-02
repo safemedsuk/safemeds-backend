@@ -72,6 +72,7 @@ export class RegulatorySubmissionService {
     actor: AuthenticatedUser,
     caseId: string,
     meta: RequestMeta,
+    format: 'R2' | 'R3' = 'R2',
   ): Promise<RegulatorySubmissionWithMeta> {
     const companyId = requireCompany(actor)
 
@@ -114,7 +115,7 @@ export class RegulatorySubmissionService {
     if (submissionFormat.channel !== 'vigiflow') {
       throw new BadRequestException({
         code: 'UNSUPPORTED_CHANNEL',
-        message: `This report type submits via the "${submissionFormat.channel}" channel, not E2B — this action only generates VigiFlow-style E2B(R3) XML/PDF.`,
+        message: `This report type submits via the "${submissionFormat.channel}" channel, not E2B — this action only generates VigiFlow-style E2B(R2) XML/PDF.`,
       })
     }
 
@@ -164,13 +165,13 @@ export class RegulatorySubmissionService {
       }
     }
 
-    const xml = this.xmlBuilder.build(data)
+    const xml = this.xmlBuilder.build(data, format)
     const pdf = await this.pdfService.render(data)
 
     const submissionId = newId()
     const xmlFile: DirectUploadFile = {
       buffer: Buffer.from(xml, 'utf8'),
-      originalname: `${data.case.referenceNumber}-E2B-v${submissionNumber}.xml`,
+      originalname: `${data.case.referenceNumber}-E2B(${format})-v${submissionNumber}.xml`,
       mimetype: 'application/xml',
     }
     const pdfFile: DirectUploadFile = {
@@ -206,6 +207,7 @@ export class RegulatorySubmissionService {
           caseId,
           submissionNumber,
           authorityId: submissionFormat.authorityId,
+          format,
           reportable: reportability.reportable,
           reportabilityReason: reportability.reason,
           xmlDocumentId: xmlUpload.document.id,
@@ -229,6 +231,7 @@ export class RegulatorySubmissionService {
           submissionId,
           submissionNumber,
           authorityCode: submissionFormat.authority.code,
+          format,
           reportable: reportability.reportable,
           reportabilityReason: reportability.reason,
         },

@@ -32,6 +32,8 @@ const CATEGORY_TO_PREFERENCE_FIELD: Record<
   deadline_breached: 'emailDeadline',
   workflow_update: 'emailWorkflowUpdate',
   case_follow_up: 'emailCaseFollowUp',
+  // Real-usage request, 22 Sep 2026 (item 13) — in-app only; the Draft Review Queue screen itself is the real due-list, matching this codebase's own in-app-only precedent for screen-visible reminders.
+  draft_review: null,
 }
 
 function requireCompany(actor: AuthenticatedUser): string {

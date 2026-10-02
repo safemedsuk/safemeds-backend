@@ -64,4 +64,36 @@ export class CreateClinicalTrialDto {
   @ApiProperty()
   @IsDateString()
   startDate: string
+
+  @ApiProperty({
+    description:
+      'Real-usage request, 22 Sep 2026 (item 19) — a trial cannot be created without proof of regulatory-authority approval. Upload the PDF first via the generic documents endpoint, then pass the resulting document id here.',
+  })
+  @IsUUID()
+  regulatoryApprovalDocumentId: string
+
+  @ApiProperty()
+  @IsDateString()
+  regulatoryApprovalDate: string
+
+  @ApiPropertyOptional({ description: 'Omit if the approval has no expiry.' })
+  @IsOptional()
+  @IsDateString()
+  regulatoryApprovalExpiryDate?: string
+
+  @ApiProperty({
+    description:
+      'Real-usage request, 22 Sep 2026 (item 19) — a trial cannot be created without proof of ethics-committee approval, uploaded the same way as the regulatory approval above.',
+  })
+  @IsUUID()
+  ethicsApprovalDocumentId: string
+
+  @ApiProperty()
+  @IsDateString()
+  ethicsApprovalDate: string
+
+  @ApiPropertyOptional({ description: 'Omit if the approval has no expiry.' })
+  @IsOptional()
+  @IsDateString()
+  ethicsApprovalExpiryDate?: string
 }

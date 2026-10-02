@@ -7,6 +7,8 @@ import { resolveDefaultReportType } from '../pv/default-report-type.util'
 import { CreatePvCaseDto } from '../pv/dto/create-pv-case.dto'
 import { PvCaseService } from '../pv/pv-case.service'
 import { SourceDocumentService } from '../pv/source-document.service'
+import { ComplaintService } from '../quality/complaint.service'
+import { PublicCreateComplaintDto } from '../quality/dto/create-complaint.dto'
 import { SubmitPublicReportDto } from './dto/submit-public-report.dto'
 
 export interface RequestMeta {
@@ -42,6 +44,23 @@ export interface PublicProductResult {
 }
 
 /**
+ * Real-usage request, 22 Sep 2026 (item 22) — a narrow, name-only
+ * projection of the company's own `Distributor` list, letting the
+ * public form's "Organization" field be a real dropdown instead of
+ * free text. This is exactly what closes the reconciliation-matching
+ * gap `ReconciliationService`'s own case-to-distributor matching
+ * already does by case-insensitive/trimmed name comparison — a
+ * picker-selected value here always matches by construction, the same
+ * way it doesn't need a `distributorCompanyId` cross-tenant link to
+ * work (that field only matters for the separate, narrower cross-tenant
+ * *read*, never for this label-matching).
+ */
+export interface PublicOrganizationResult {
+  id: string
+  name: string
+}
+
+/**
  * VigiCloud Stage 3.2 — the per-company public case-reporting URL
  * (`{FRONTEND_URL}/report/{slug}`). No authentication at all — resolves
  * the tenant purely from the slug, via `RlsService.runWithSystemAccess()`
@@ -59,6 +78,7 @@ export class PublicReportingService {
     private readonly mailService: MailService,
     private readonly documentsService: DocumentsService,
     private readonly sourceDocumentService: SourceDocumentService,
+    private readonly complaintService: ComplaintService,
   ) {}
 
   async resolveCompanyDisplay(slug: string): Promise<PublicCompanyDisplay> {
@@ -83,10 +103,17 @@ export class PublicReportingService {
     }
 
     const today = new Date().toISOString().slice(0, 10)
+    // Real-usage request, 22 Sep 2026 (item 12) — a self-report's country
+    // of occurrence *and* country of report are both the reporter's own
+    // country of residence, not the company's home country — the old
+    // fallback here silently mis-classified every public submission as
+    // having occurred in the *company's* home market regardless of where
+    // the reporter actually is.
+    const reportCountryId = dto.countryOfResidenceId ?? company.homeCountryId
     const fullDto: CreatePvCaseDto = {
       reportTypeId: reportType.id,
-      countryOfOccurrenceId: company.homeCountryId,
-      countryOfReportId: company.homeCountryId,
+      countryOfOccurrenceId: reportCountryId,
+      countryOfReportId: reportCountryId,
       awarenessDate: today,
       receivedDate: today,
       reporter: dto.reporter,
@@ -94,6 +121,7 @@ export class PublicReportingService {
       suspectProducts: dto.suspectProducts,
       adverseEvents: dto.adverseEvents,
       consent: dto.consent,
+      contactConsent: dto.contactConsent,
       suspectedFalsifiedOrSubstandard: dto.suspectedFalsifiedOrSubstandard,
       pregnancy: dto.pregnancy,
     }
@@ -162,6 +190,28 @@ export class PublicReportingService {
   }
 
   /**
+   * Real-usage request, 22 Sep 2026 (item 22) — the company's own
+   * active distributors, name-only, for the public form's "Organization"
+   * dropdown. No `q` param, unlike `searchProducts()` — a distributor
+   * list is realistically small enough to just show in full (the same
+   * assumption the authenticated Reconciliation screen's own distributor
+   * list already makes).
+   */
+  async listOrganizations(slug: string): Promise<PublicOrganizationResult[]> {
+    const company = await this.findActiveCompanyBySlug(slug)
+
+    const rows = await this.rls.runWithSystemAccess((tx) =>
+      tx.distributor.findMany({
+        where: { companyId: company.id, status: 'active' },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
+    )
+
+    return rows
+  }
+
+  /**
    * VigiCloud testing-todo Stage 3.4 — an optional, post-submission
    * attachment step: the public form shows the confirmation screen with
    * the real reference number first, then lets the reporter attach a
@@ -201,6 +251,25 @@ export class PublicReportingService {
     )
     await this.sourceDocumentService.linkSystem(company.id, pvCase.id, document.id, meta)
     return { attached: true }
+  }
+
+  /**
+   * QualCloud (Phase 13) Stage 5 — reuses this module's own slug-
+   * resolution rather than a second, parallel public-complaint slug —
+   * a distributor/retail customer complaint naturally sits alongside
+   * the existing public adverse-event reporting page. Lands as a real
+   * `Complaint` row, `createdBy: null`, never automatically routed to a
+   * PV case — an actual human still runs `classify()` on it, same as
+   * every authenticated-intake complaint.
+   */
+  async submitComplaint(
+    slug: string,
+    dto: PublicCreateComplaintDto,
+    meta: RequestMeta,
+  ): Promise<{ complaintNumber: string }> {
+    const company = await this.findActiveCompanyBySlug(slug)
+    const created = await this.complaintService.createPublic(company.id, dto, meta)
+    return { complaintNumber: created.complaintNumber }
   }
 
   private async findActiveCompanyBySlug(slug: string) {

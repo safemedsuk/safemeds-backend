@@ -111,8 +111,15 @@ function buildHarness() {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
   }
 
-  const service = new ReportsService(rls as never, auditService)
-  return { service, rows, auditLog, workflowInstanceRows }
+  let uploadCounter = 0
+  const uploadDirect = jest.fn().mockImplementation(() => {
+    uploadCounter += 1
+    return Promise.resolve({ document: { id: `doc-${uploadCounter}` }, version: { id: `version-${uploadCounter}` } })
+  })
+  const documentsService = { uploadDirect } as never
+
+  const service = new ReportsService(rls as never, auditService, documentsService)
+  return { service, rows, auditLog, workflowInstanceRows, uploadDirect }
 }
 
 describe('ReportsService', () => {
@@ -282,6 +289,40 @@ describe('ReportsService', () => {
       })
 
       await expect(service.submit(actor, created.id, {})).rejects.toThrow(ConflictException)
+    })
+  })
+
+  describe('attachEvidence() (real-usage request, 22 Sep 2026, item 22)', () => {
+    it('uploads the file and records the resulting document id on the report', async () => {
+      const { service, uploadDirect, auditLog } = buildHarness()
+      const created = await service.create(
+        actor,
+        { moduleKey: 'pv', reportTypeKey: 'signal_report', title: 'Signal SIG-0001 report' },
+        {},
+      )
+
+      const file = { buffer: Buffer.from('fake-pdf'), originalname: 'proof.pdf', mimetype: 'application/pdf' }
+      const updated = await service.attachEvidence(actor, created.id, file, { ip: '1.2.3.4' })
+
+      expect(uploadDirect).toHaveBeenCalledWith(
+        actor,
+        'generated_report',
+        created.id,
+        file,
+        { title: 'Submission Evidence' },
+        { ip: '1.2.3.4' },
+      )
+      expect(updated.evidenceDocumentId).toBe('doc-1')
+      expect(auditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'generated_report_evidence_attached' }),
+      )
+    })
+
+    it('404s for a report that does not exist', async () => {
+      const { service } = buildHarness()
+      const file = { buffer: Buffer.from('x'), originalname: 'x.pdf', mimetype: 'application/pdf' }
+      await expect(service.attachEvidence(actor, 'nope', file, {})).rejects.toThrow(NotFoundException)
     })
   })
 })

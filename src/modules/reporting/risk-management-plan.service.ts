@@ -374,6 +374,30 @@ export class RiskManagementPlanService {
     })
   }
 
+  /**
+   * Real-usage request, 22 Sep 2026 (item 8) — used only by
+   * `RmpImporter`, mirroring `ClinicalTrialService.findTrialByReference()`'s
+   * exact "resolve by the human-readable name a spreadsheet row actually
+   * has, not the internal id" shape. `Product.brandName` has no
+   * uniqueness constraint at the schema level (unlike a trial's own
+   * reference number), so this is a best-effort first-match, not a
+   * guaranteed-unique lookup — documented here rather than silently
+   * assumed, matching this codebase's own "flag the real limitation"
+   * discipline.
+   */
+  async findProductByBrandName(
+    actor: AuthenticatedUser,
+    brandName: string,
+  ): Promise<{ id: string } | null> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, (tx) =>
+      tx.product.findFirst({
+        where: { companyId, brandName: { equals: brandName, mode: 'insensitive' }, isActive: true },
+        select: { id: true },
+      }),
+    )
+  }
+
   /** Renewals due within the next 90 days, or already overdue — used by `DashboardService`. */
   async countRenewalsDue(companyId: string): Promise<number> {
     return this.rls.runAsCompany(companyId, async (tx) => {

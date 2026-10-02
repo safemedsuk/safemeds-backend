@@ -266,7 +266,7 @@ export class SignalService {
 
       const updated = await tx.signal.update({
         where: { id },
-        data: { assessmentNote: dto.assessmentNote },
+        data: { assessmentNote: dto.assessmentNote, assessedBy: actor.sub },
       })
 
       await this.auditService.log(tx, {

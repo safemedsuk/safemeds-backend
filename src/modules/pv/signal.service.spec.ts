@@ -262,6 +262,18 @@ describe('SignalService', () => {
       expect(updated.assessmentNote).toBe('Consistent with a genuine safety signal')
     })
 
+    it('records the acting user as the assessor (real-usage request, 22 Sep 2026, item 22 — the basis for the four-eyes guard)', async () => {
+      const { service } = buildHarness()
+      const signal = await service.create(actor, baseDto(), {})
+      const updated = await service.recordAssessment(
+        actor,
+        signal.id,
+        { assessmentNote: 'Consistent with a genuine safety signal' },
+        {},
+      )
+      expect(updated.assessedBy).toBe(actor.sub)
+    })
+
     it('records a recommendation action', async () => {
       const { service } = buildHarness()
       const signal = await service.create(actor, baseDto(), {})

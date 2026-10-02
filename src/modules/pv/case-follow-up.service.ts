@@ -185,6 +185,18 @@ export class CaseFollowUpService {
         })
       }
 
+      if (dto.documentId) {
+        const document = await tx.document.findFirst({
+          where: { id: dto.documentId, companyId },
+        })
+        if (!document) {
+          throw new NotFoundException({
+            code: 'NOT_FOUND',
+            message: 'Document not found for this company — upload it first via the documents endpoint',
+          })
+        }
+      }
+
       await tx.caseFollowUpAttempt.update({
         where: { id: pendingAttempt.id },
         data: {
@@ -192,6 +204,7 @@ export class CaseFollowUpService {
           respondedAt: new Date(),
           loggedBy: actor.sub,
           noteEncrypted: dto.note ? this.textEncryption.encrypt(dto.note) : null,
+          documentId: dto.documentId ?? null,
         },
       })
 
@@ -512,6 +525,17 @@ export class CaseFollowUpService {
         data: { outcome: 'pending', dueAt: nextCheckDueAt },
       })
 
+      // Real-usage request, 22 Sep 2026 (item 18) — new information from
+      // the reporter means the case's own medical/causality assessment
+      // may no longer be correct, so it goes back to Triage & Seriousness
+      // for reassessment rather than sitting wherever it happened to be
+      // (up to and including already-Submitted — a follow-up cycle can
+      // only still be open on a case that hasn't reached Closed &
+      // Archived yet, since that transition's own guard blocks closing
+      // while a follow-up cycle is open). A case already at Intake or
+      // Triage is left alone — there's nothing further back to reopen.
+      await this.reopenCaseToTriage(tx, companyId, followUp.caseId, meta)
+
       await this.auditService.log(tx, {
         companyId,
         actorType: 'system',
@@ -617,6 +641,60 @@ export class CaseFollowUpService {
         recordId: followUp.caseId,
       })
     }
+  }
+
+  /**
+   * Real-usage request, 22 Sep 2026 (item 18) — a direct, system-owned
+   * workflow-state override, deliberately **not** routed through
+   * `WorkflowService.transition()`: that method requires a real actor
+   * holding the target transition's required role, which doesn't fit a
+   * system-triggered reset with no human actor behind it (the periodic
+   * timeout path, `processDue()`, can hit this too). Mirrors
+   * `PvWorkflowGuards`'s own registered status-sync function exactly
+   * (`Case.status = toStateKey`) so the denormalized column stays
+   * consistent with the real `WorkflowInstance`, the same guarantee a
+   * normal transition already provides. A no-op if the case is already
+   * at Intake or Triage (nothing further back to reopen), and — per
+   * `PvWorkflowGuards`'s own submitted→closed_archived guard, which
+   * blocks closing while a follow-up cycle is still open — this can
+   * never actually run against an already-Closed & Archived case.
+   */
+  private async reopenCaseToTriage(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    caseId: string,
+    meta: RequestMeta,
+  ): Promise<void> {
+    const instance = await tx.workflowInstance.findFirst({
+      where: { recordType: PV_CASE_RECORD_TYPE, recordId: caseId },
+      include: { currentState: true },
+    })
+    if (!instance || instance.currentState.stateKey === 'intake' || instance.currentState.stateKey === 'triage') {
+      return
+    }
+
+    const triageState = await tx.workflowState.findFirst({
+      where: { definitionId: instance.definitionId, stateKey: 'triage' },
+    })
+    if (!triageState) return
+
+    const fromStateKey = instance.currentState.stateKey
+    await tx.workflowInstance.update({
+      where: { id: instance.id },
+      data: { currentStateId: triageState.id, enteredAt: new Date(), version: { increment: 1 } },
+    })
+    await tx.case.update({ where: { id: caseId }, data: { status: 'triage' } })
+
+    await this.auditService.log(tx, {
+      companyId,
+      actorType: 'system',
+      action: 'pv_case_reopened_for_follow_up',
+      recordType: PV_CASE_RECORD_TYPE,
+      recordId: caseId,
+      oldValue: { stateKey: fromStateKey },
+      newValue: { stateKey: 'triage', reason: 'Reporter provided new information during follow-up' },
+      ip: meta.ip,
+    })
   }
 
   /**

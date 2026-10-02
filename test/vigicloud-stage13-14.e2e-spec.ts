@@ -139,6 +139,29 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
     return createAuthenticatedActor(app, testPrisma, { companyId, roleKeys: [roleKey] })
   }
 
+  /**
+   * Real-usage request, 22 Sep 2026 (items 19/20) — `POST
+   * /pv/clinical-trials` now requires a regulatory-authority approval
+   * document and an ethics-committee approval document, each with its
+   * own approval date. Every test in this file that creates a trial
+   * spreads this into its payload — mirroring `linkAnySourceDocument()`'s
+   * own direct-`Document`-row pattern just below.
+   */
+  async function approvalDocs(actor: TestActor): Promise<Record<string, string>> {
+    const regulatoryApprovalDocumentId = randomUUID()
+    const ethicsApprovalDocumentId = randomUUID()
+    await withBypass(async (tx) => {
+      await tx.document.create({ data: { id: regulatoryApprovalDocumentId, companyId, recordType: 'clinical_trial', recordId: companyId, title: 'Regulatory approval', createdBy: actor.userId } })
+      await tx.document.create({ data: { id: ethicsApprovalDocumentId, companyId, recordType: 'clinical_trial', recordId: companyId, title: 'Ethics approval', createdBy: actor.userId } })
+    })
+    return {
+      regulatoryApprovalDocumentId,
+      regulatoryApprovalDate: '2025-01-01',
+      ethicsApprovalDocumentId,
+      ethicsApprovalDate: '2025-01-01',
+    }
+  }
+
   /** Stage 3.7's mandatory-source-document guard on `(pv_case, intake)` applies regardless of report type — every case needs one linked before it can leave Intake. */
   async function linkAnySourceDocument(actor: TestActor, caseId: string): Promise<void> {
     const documentId = randomUUID()
@@ -179,7 +202,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
     it('a clinical_trial_sae case classified serious resolves the real 24-hour rule against the Ethics Committee destination, not PPB', async () => {
       const actor = await actorWith('QPPV_13', ['pv.capture_case', 'pv.triage_case', 'pv.manage_clinical_trials'])
       const trial = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
-        .send({ trialReference: 'NCT-0001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01' })
+        .send({ trialReference: 'NCT-0001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01', ...(await approvalDocs(actor)) })
         .expect(201)
 
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/pv/cases'), actor)
@@ -209,13 +232,54 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
         .expect(400)
     })
 
+    it('real-usage request, 22 Sep 2026 (items 19/20) — rejects trial creation with no regulatory or ethics approval document, requires both, and supports renewal', async () => {
+      const actor = await actorWith('QPPV_14X', ['pv.manage_clinical_trials'])
+
+      await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
+        .send({ trialReference: 'NCT-APPR-1', trialName: 'A Study of Approvals', countryId, startDate: '2025-01-01' })
+        .expect(400)
+
+      const docs = await approvalDocs(actor)
+      const wrongCompanyDoc = randomUUID()
+      const otherCompanyId = randomUUID()
+      await withBypass((tx) =>
+        tx.company
+          .create({ data: { id: otherCompanyId, name: 'Other Co', companyType: 'manufacturer', homeCountryId: countryId, status: 'active' } })
+          .then(() => tx.document.create({ data: { id: wrongCompanyDoc, companyId: otherCompanyId, recordType: 'clinical_trial', recordId: otherCompanyId, title: 'Not this company', createdBy: actor.userId } })),
+      )
+      await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
+        .send({ trialReference: 'NCT-APPR-2', trialName: 'A Study of Approvals', countryId, startDate: '2025-01-01', ...docs, regulatoryApprovalDocumentId: wrongCompanyDoc })
+        .expect(404)
+
+      const created = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
+        .send({ trialReference: 'NCT-APPR-3', trialName: 'A Study of Approvals', countryId, startDate: '2025-01-01', ...docs, regulatoryApprovalExpiryDate: '2027-01-01' })
+        .expect(201)
+      expect(created.body.data.regulatoryApprovalDocumentId).toBe(docs.regulatoryApprovalDocumentId)
+      expect(created.body.data.ethicsApprovalDocumentId).toBe(docs.ethicsApprovalDocumentId)
+
+      const fetched = await authed(request(httpServer(app)).get(`/api/v1/pv/clinical-trials/${created.body.data.id}`), actor).expect(200)
+      expect(fetched.body.data.regulatoryApprovalStatus).toBe('valid')
+      expect(fetched.body.data.ethicsApprovalStatus).toBe('no_expiry')
+
+      const renewedDocId = randomUUID()
+      await withBypass((tx) => tx.document.create({ data: { id: renewedDocId, companyId, recordType: 'clinical_trial', recordId: companyId, title: 'Renewed ethics approval', createdBy: actor.userId } }))
+      const renewed = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/clinical-trials/${created.body.data.id}/renew-approval`), actor)
+        .send({ approvalType: 'ethics', documentId: renewedDocId, approvalDate: '2027-06-01', expiryDate: '2028-06-01' })
+        .expect(201)
+      expect(renewed.body.data.ethicsApprovalDocumentId).toBe(renewedDocId)
+      expect(renewed.body.data.regulatoryApprovalDocumentId).toBe(docs.regulatoryApprovalDocumentId) // untouched
+
+      const audit = await testPrisma.auditEntry.findFirst({ where: { action: 'clinical_trial_approval_renewed', recordId: created.body.data.id as string } })
+      expect(audit).toBeTruthy()
+    })
+
     it('creates and manages a clinical trial, gated by pv.manage_clinical_trials', async () => {
       const manager = await actorWith('QPPV_14B', ['pv.manage_clinical_trials'])
       const readOnly = await actorWith('DISPENSING_PHARMACIST_14B', ['pv.capture_case'])
       const noAccess = await actorWith('EXECUTIVE_READONLY_14B', [])
 
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), manager)
-        .send({ trialReference: 'NCT-1001', trialName: 'A Study of Amoxil', countryId, startDate: '2025-01-01', sponsor: 'Acme Pharma', blindingType: 'double_blind' })
+        .send({ trialReference: 'NCT-1001', trialName: 'A Study of Amoxil', countryId, startDate: '2025-01-01', sponsor: 'Acme Pharma', blindingType: 'double_blind', ...(await approvalDocs(manager)) })
         .expect(201)
       expect(created.body.data.trialReference).toBe('NCT-1001')
 
@@ -236,7 +300,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
     it('enrolls a subject and links a case to both the trial and the subject', async () => {
       const actor = await actorWith('QPPV_14C', ['pv.capture_case', 'pv.manage_clinical_trials'])
       const trial = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
-        .send({ trialReference: 'NCT-2001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01' })
+        .send({ trialReference: 'NCT-2001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01', ...(await approvalDocs(actor)) })
         .expect(201)
 
       const subject = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/clinical-trials/${trial.body.data.id}/subjects`), actor)
@@ -263,7 +327,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
       const noUnblindPermission = await actorWith('REGULATORY_AFFAIRS_OFFICER_14D', ['pv.manage_clinical_trials'])
 
       const trial = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), manager)
-        .send({ trialReference: 'NCT-3001', trialName: 'A Study of Amoxil', countryId, startDate: '2025-01-01' })
+        .send({ trialReference: 'NCT-3001', trialName: 'A Study of Amoxil', countryId, startDate: '2025-01-01', ...(await approvalDocs(manager)) })
         .expect(201)
       const subject = await authedWrite(request(httpServer(app)).post(`/api/v1/pv/clinical-trials/${trial.body.data.id}/subjects`), manager)
         .send({ subjectCode: 'SUBJ-01', enrolledAt: '2025-02-01', treatmentArm: 'Arm A (active, 500mg)' })
@@ -304,7 +368,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
     it('bulk-imports clinical trial subjects via the generic Stage 0.6 importer framework', async () => {
       const actor = await actorWith('QPPV_14E', ['pv.manage_clinical_trials'])
       await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
-        .send({ trialReference: 'NCT-4001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01' })
+        .send({ trialReference: 'NCT-4001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01', ...(await approvalDocs(actor)) })
         .expect(201)
 
       const csvText = 'Trial Reference,Subject Code,Sex,Age,Enrollment Date\nNCT-4001,SUBJ-01,Female,29,2025-03-01\nNCT-4001,SUBJ-02,Male,55,2025-03-02\n'
@@ -328,7 +392,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
     it('annual renewal reminder scan creates a real Task, assigned to QPPV, for a trial past its interval', async () => {
       const actor = await actorWith('QPPV_14F', ['pv.manage_clinical_trials'])
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
-        .send({ trialReference: 'NCT-5001', trialName: 'A Study of Amoxil', countryId, startDate: '2020-01-01' })
+        .send({ trialReference: 'NCT-5001', trialName: 'A Study of Amoxil', countryId, startDate: '2020-01-01', ...(await approvalDocs(actor)) })
         .expect(201)
 
       const { ClinicalTrialAnnualReminderService } = await import('../src/modules/pv/clinical-trial-annual-reminder.service')
@@ -347,7 +411,7 @@ describe('VigiCloud Stage 13/14 (e2e)', () => {
       // Role key must be exactly 'REGULATORY_AFFAIRS_OFFICER' — the required actor for both fixture transitions seeded in beforeEach.
       const actor = await actorWith('REGULATORY_AFFAIRS_OFFICER', ['pv.capture_case', 'pv.manage_clinical_trials', 'documents.manage'])
       const trial = await authedWrite(request(httpServer(app)).post('/api/v1/pv/clinical-trials'), actor)
-        .send({ trialReference: 'NCT-6001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01' })
+        .send({ trialReference: 'NCT-6001', trialName: 'A Study of Panadol', countryId, startDate: '2025-01-01', ...(await approvalDocs(actor)) })
         .expect(201)
       const created = await authedWrite(request(httpServer(app)).post('/api/v1/pv/cases'), actor)
         .send(buildCasePayload({ reportTypeId: clinicalTrialSaeReportTypeId, channel: 'clinical_study', clinicalTrialId: trial.body.data.id }))

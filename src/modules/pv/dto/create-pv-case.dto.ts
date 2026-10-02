@@ -164,6 +164,24 @@ export class SuspectProductInputDto {
   @IsString()
   batchNumber?: string
 
+  /** Real-usage request, 22 Sep 2026 — see `SuspectProduct.genericName`'s own schema doc comment. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  genericName?: string
+
+  /** Real-usage request, 22 Sep 2026 — the physical batch's own manufacturing date, distinct from `startDate` (the patient's own exposure window) below. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  manufacturingDate?: string
+
+  /** Real-usage request, 22 Sep 2026 — the physical batch's own expiry date. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()
@@ -185,7 +203,7 @@ export class SuspectProductInputDto {
   obtainedCountryId?: string
 
   /**
-   * VigiCloud Stage 3.1 — special-situation flags matching ICH E2B(R3)'s
+   * VigiCloud Stage 3.1 — special-situation flags matching ICH E2B(R2)'s
    * `drugadditional` field group, modelled per suspect product (see
    * `SuspectProduct`'s own schema doc comment).
    */
@@ -427,6 +445,30 @@ export class CreatePvCaseDto {
   @ValidateNested()
   @Type(() => CaseConsentInputDto)
   consent?: CaseConsentInputDto
+
+  /**
+   * Real-usage bug, 22 Sep 2026 — "we need to take consent for follow
+   * up during adverse report reporting." Found while checking this:
+   * `CaseFollowUpService.startCycle()` has always required a real
+   * `consentType: 'contact'` `ConsentRecord` before it will ever queue
+   * an automated email, but **nothing anywhere — not the internal
+   * wizard, not the public form, not email/WhatsApp intake — has ever
+   * captured one**, only `'report'` (data-processing) consent. Every
+   * case, on every channel, has been silently ineligible for automated
+   * follow-up since Stage 11 shipped; the manual phone fallback would
+   * have shown "contact consent not on file" for all of them too. A
+   * genuinely separate field, not a rename of `consent` above — a
+   * reporter can consent to their report being processed without
+   * agreeing to be personally contacted again.
+   */
+  @ApiPropertyOptional({
+    type: CaseConsentInputDto,
+    description: 'Captured as a ConsentRecord against this case, consentType "contact" — required before an automated follow-up email can ever be sent',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CaseConsentInputDto)
+  contactConsent?: CaseConsentInputDto
 
   /**
    * VigiCloud Stage 3.1 — a `Case` flag, not a separate intake path (see

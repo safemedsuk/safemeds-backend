@@ -20,11 +20,11 @@ import {
   SuspectProduct,
   WhoDrugTerm,
 } from '@prisma/client'
-import { randomInt } from 'crypto'
 
 import { TextEncryptionService } from '../../common/encryption/text-encryption.service'
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { getIso3 } from '../../common/iso3-country-codes.const'
 import { paginate, PaginatedResult } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
@@ -40,6 +40,7 @@ import {
   SuspectProductInputDto,
 } from './dto/create-pv-case.dto'
 import { ListPvCasesQueryDto } from './dto/list-pv-cases-query.dto'
+import { RejectDraftDto } from './dto/reject-draft.dto'
 import { DuplicateDetectionService } from './duplicate-detection.service'
 import { SignalTransitionLogEntry } from './signal.service'
 import { ValidityGateResult, ValidityGateService } from './validity-gate.service'
@@ -224,6 +225,19 @@ export class PvCaseService {
           meta,
         )
       }
+      if (dto.contactConsent) {
+        await this.consentService.capture(
+          actor,
+          {
+            recordType: PV_CASE_RECORD_TYPE,
+            recordId: graph.case.id,
+            consentType: 'contact',
+            granted: dto.contactConsent.granted,
+            method: dto.contactConsent.method,
+          },
+          meta,
+        )
+      }
 
       await this.recordVersioningService.createVersion(
         actor,
@@ -317,6 +331,19 @@ export class PvCaseService {
           meta,
         )
       }
+      if (dto.contactConsent) {
+        await this.consentService.captureSystem(
+          companyId,
+          {
+            recordType: PV_CASE_RECORD_TYPE,
+            recordId: graph.case.id,
+            consentType: 'contact',
+            granted: dto.contactConsent.granted,
+            method: dto.contactConsent.method,
+          },
+          meta,
+        )
+      }
 
       await this.recordVersioningService.createVersion(
         { companyId },
@@ -399,6 +426,67 @@ export class PvCaseService {
         recordId: id,
         oldValue: { requiresDraftReview: true },
         newValue: { requiresDraftReview: false },
+        ip: meta.ip,
+      })
+
+      return updated
+    })
+  }
+
+  /**
+   * Real-usage request, 22 Sep 2026 (item 13) — the reviewer's other
+   * option besides confirming: this draft never should have become a
+   * case (spam, an obvious duplicate submission, unusable content).
+   * Requires a claim first, matching `confirmDraft()`'s own precedent —
+   * a reason is always required. Never deletes the row; it simply
+   * leaves the draft-review queue (`requiresDraftReview: false`) with
+   * the decision recorded.
+   */
+  async rejectDraft(
+    actor: AuthenticatedUser,
+    id: string,
+    dto: RejectDraftDto,
+    meta: RequestMeta,
+  ): Promise<Case> {
+    const companyId = requireCompany(actor)
+
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const existing = await tx.case.findFirst({ where: { id, companyId } })
+      if (!existing) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'PV case not found' })
+      }
+      if (!existing.requiresDraftReview) {
+        throw new ConflictException({
+          code: 'NOT_A_DRAFT',
+          message: 'This case is not in the draft-review queue',
+        })
+      }
+      if (!existing.draftClaimedBy || existing.draftClaimedBy !== actor.sub) {
+        throw new ConflictException({
+          code: 'MUST_CLAIM_FIRST',
+          message: 'Claim this case before rejecting it — someone else may already be reviewing it.',
+        })
+      }
+
+      const updated = await tx.case.update({
+        where: { id },
+        data: {
+          requiresDraftReview: false,
+          draftClaimedBy: null,
+          draftClaimedAt: null,
+          draftRejectedAt: new Date(),
+          draftRejectionReason: dto.reason,
+        },
+      })
+
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'pv_case_draft_rejected',
+        recordType: PV_CASE_RECORD_TYPE,
+        recordId: id,
+        oldValue: { requiresDraftReview: true },
+        newValue: { requiresDraftReview: false, reason: dto.reason },
         ip: meta.ip,
       })
 
@@ -713,12 +801,15 @@ export class PvCaseService {
           caseId,
           drugCharacterization: dto.drugCharacterization,
           medicinalProduct: dto.medicinalProduct,
+          genericName: dto.genericName ?? null,
           activeSubstanceName: dto.activeSubstanceName ?? null,
           atcCode: dto.atcCode ?? null,
           dosageForm: dto.dosageForm ?? null,
           route: dto.route ?? null,
           doseText: dto.doseText ?? null,
           batchNumber: dto.batchNumber ?? null,
+          manufacturingDate: dto.manufacturingDate ? new Date(dto.manufacturingDate) : null,
+          expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
           startDate: dto.startDate ? new Date(dto.startDate) : null,
           endDate: dto.endDate ? new Date(dto.endDate) : null,
           actionTaken: dto.actionTaken ?? null,
@@ -881,7 +972,12 @@ export class PvCaseService {
       sourceChannelReference: string | null
     },
   ): Promise<CaseGraph> {
-    const referenceNumber = await this.generateUniqueReferenceNumber(companyId)
+    const referenceNumber = await this.generateUniqueReferenceNumber(
+      tx,
+      companyId,
+      dto.countryOfReportId,
+      dto.countryOfOccurrenceId,
+    )
 
     const created = await tx.case.create({
       data: {
@@ -948,12 +1044,15 @@ export class PvCaseService {
             caseId: created.id,
             drugCharacterization: input.drugCharacterization,
             medicinalProduct: input.medicinalProduct,
+            genericName: input.genericName ?? null,
             activeSubstanceName: input.activeSubstanceName ?? null,
             atcCode: input.atcCode ?? null,
             dosageForm: input.dosageForm ?? null,
             route: input.route ?? null,
             doseText: input.doseText ?? null,
             batchNumber: input.batchNumber ?? null,
+            manufacturingDate: input.manufacturingDate ? new Date(input.manufacturingDate) : null,
+            expiryDate: input.expiryDate ? new Date(input.expiryDate) : null,
             startDate: input.startDate ? new Date(input.startDate) : null,
             endDate: input.endDate ? new Date(input.endDate) : null,
             actionTaken: input.actionTaken ?? null,
@@ -1123,20 +1222,54 @@ export class PvCaseService {
     return { ...rest, narrative: this.textEncryption.decrypt(narrativeEncrypted) }
   }
 
-  private async generateUniqueReferenceNumber(companyId: string): Promise<string> {
-    const year = new Date().getFullYear()
+  /**
+   * Real-usage request, 22 Sep 2026 — "CMR-2026-KEN-xxxxx where CMR
+   * represents the country of report, KEN the country of occurrence,
+   * and xxxxx a number that can help identify day and month or time."
+   * Replaces the old `PV-{year}-{5 random digits}` scheme. The 5-digit
+   * suffix is real, not random: 3 digits of day-of-year (001–366) plus
+   * a 2-digit same-day sequence for this company (a real running count
+   * of today's cases, not a coin-flip) — so the number itself carries
+   * genuine date information, matching the request. For a public-URL
+   * self-report, `countryOfReportId`/`countryOfOccurrenceId` are both
+   * the reporter's own selected country of residence (see
+   * `PublicReportingService.submit()`), so both halves of the code
+   * come out identical — also per the request (item 12).
+   */
+  private async generateUniqueReferenceNumber(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    countryOfReportId: string,
+    countryOfOccurrenceId: string,
+  ): Promise<string> {
+    const now = new Date()
+    const year = now.getUTCFullYear()
+    const startOfYear = Date.UTC(year, 0, 1)
+    const dayOfYear = Math.floor((now.getTime() - startOfYear) / 86_400_000) + 1
+    const dayDigits = dayOfYear.toString().padStart(3, '0')
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const suffix = randomInt(0, 100_000).toString().padStart(5, '0')
-      const candidate = `PV-${year}-${suffix}`
-      const existing = await this.rls.runAsCompany(companyId, (tx) =>
-        tx.case.findFirst({ where: { companyId, referenceNumber: candidate } }),
-      )
+    const [reportCountry, occurrenceCountry] = await Promise.all([
+      tx.country.findUniqueOrThrow({ where: { id: countryOfReportId }, select: { isoCode: true } }),
+      tx.country.findUniqueOrThrow({ where: { id: countryOfOccurrenceId }, select: { isoCode: true } }),
+    ])
+    const reportIso3 = getIso3(reportCountry.isoCode)
+    const occurrenceIso3 = getIso3(occurrenceCountry.isoCode)
+
+    const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    const startOfTomorrow = new Date(startOfDay.getTime() + 86_400_000)
+    const casesToday = await tx.case.count({
+      where: { companyId, createdAt: { gte: startOfDay, lt: startOfTomorrow } },
+    })
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const seq = ((casesToday + attempt) % 100).toString().padStart(2, '0')
+      const candidate = `${reportIso3}-${year}-${occurrenceIso3}-${dayDigits}${seq}`
+      const existing = await tx.case.findFirst({ where: { companyId, referenceNumber: candidate } })
       if (!existing) {
         return candidate
       }
     }
 
-    throw new Error('Could not generate a unique PV case reference number after 5 attempts')
+    throw new Error('Could not generate a unique PV case reference number after 20 attempts')
   }
 }
