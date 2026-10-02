@@ -25,6 +25,7 @@ function buildHarness() {
     .fn()
     .mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data }))
   const manufacturerFindUnique = jest.fn()
+  const manufacturerFindFirst = jest.fn()
   const manufacturerFindMany = jest.fn().mockResolvedValue([])
   const manufacturerCount = jest.fn().mockResolvedValue(0)
 
@@ -41,6 +42,7 @@ function buildHarness() {
       create: manufacturerCreate,
       update: manufacturerUpdate,
       findUnique: manufacturerFindUnique,
+      findFirst: manufacturerFindFirst,
       findMany: manufacturerFindMany,
       count: manufacturerCount,
     },
@@ -61,6 +63,7 @@ function buildHarness() {
     manufacturerCreate,
     manufacturerUpdate,
     manufacturerFindUnique,
+    manufacturerFindFirst,
     manufacturingSiteCreate,
     manufacturingSiteFindUnique,
     localRepresentativeCreate,
@@ -110,6 +113,27 @@ describe('RegEntitiesService — manufacturers', () => {
 
     await expect(service.deactivateManufacturer(actor, 'nope', {})).rejects.toMatchObject({
       response: { code: 'NOT_FOUND' },
+    })
+  })
+
+  describe('findManufacturerByName (testing-correction-explanation.md §4.1 — the bulk importer\'s de-duplication lookup)', () => {
+    it('matches an existing manufacturer case-insensitively', async () => {
+      const { service, manufacturerFindFirst } = buildHarness()
+      manufacturerFindFirst.mockResolvedValue({ id: 'manufacturer-1', name: 'Acme Pharma' })
+
+      const found = await service.findManufacturerByName(actor, 'acme pharma')
+
+      expect(found).toMatchObject({ id: 'manufacturer-1' })
+      expect(manufacturerFindFirst).toHaveBeenCalledWith({
+        where: { companyId: 'company-1', name: { equals: 'acme pharma', mode: 'insensitive' }, isActive: true },
+      })
+    })
+
+    it('returns null when no manufacturer matches', async () => {
+      const { service, manufacturerFindFirst } = buildHarness()
+      manufacturerFindFirst.mockResolvedValue(null)
+
+      expect(await service.findManufacturerByName(actor, 'Nobody Pharma')).toBeNull()
     })
   })
 })

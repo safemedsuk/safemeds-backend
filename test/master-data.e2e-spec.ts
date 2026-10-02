@@ -28,6 +28,13 @@ describe('Master data (e2e)', () => {
     return req.set('Cookie', actor.cookieHeader).set('X-CSRF-Token', actor.csrfHeader)
   }
 
+  /** Mints a real, single-use re-auth signature token via the app's own signing path — same technique `workflow.e2e-spec.ts`/every RegCloud e2e spec already uses, since withdrawal is now signature-gated (testing-correction-explanation.md §3.6). */
+  async function mintSignatureToken(actor: TestActor): Promise<string> {
+    const { SignatureTokenService } = await import('../src/modules/auth/services/signature-token.service')
+    const signatureTokenService = app.get(SignatureTokenService)
+    return signatureTokenService.issue(actor.userId)
+  }
+
   beforeEach(async () => {
     const countryId = randomUUID()
     await testPrisma.country.create({ data: { id: countryId, isoCode: 'KE', name: 'Kenya' } })
@@ -166,10 +173,16 @@ describe('Master data (e2e)', () => {
 
     const withdrawn = await authedWrite(
       request(httpServer(app)).post(
-        `/api/v1/registrations/${registration.body.data.id}/deactivate`,
+        `/api/v1/registrations/${registration.body.data.id}/withdraw`,
       ),
       manager,
-    ).expect(201)
+    )
+      .send({
+        reason: 'Product discontinued.',
+        intentStatement: 'I withdraw this registration.',
+        signatureToken: await mintSignatureToken(manager),
+      })
+      .expect(201)
     expect(withdrawn.body.data.status).toBe('withdrawn')
   })
 

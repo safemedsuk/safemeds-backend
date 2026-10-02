@@ -15,6 +15,18 @@ export interface CompletenessSlotResult {
 
 export interface CompletenessGateResult {
   allowed: boolean
+  /**
+   * testing-correction-explanation.md §1.2 — true when this dossier is
+   * wrapped by a `RegVariation` (a variation, or a renewal — `RegVariation
+   * .variationType === 'renewal'`), meaning the checklist below is shown
+   * for guidance only and can never block a transition. Only a fresh
+   * registration dossier (no wrapping `RegVariation`) still enforces
+   * mandatory documents — the checklist configured in the admin console
+   * was always meant for *registration*, never for what a variation/
+   * renewal/retention actually needs, which differs per case and isn't
+   * something a fixed per-product-class list can honestly represent.
+   */
+  guidanceOnly: boolean
   slots: CompletenessSlotResult[]
 }
 
@@ -62,14 +74,22 @@ export class CompletenessGateService {
     tx: Prisma.TransactionClient,
     dossierId: string,
   ): Promise<CompletenessGateResult> {
-    const slots = await tx.regDossierDocumentSlot.findMany({
-      where: { regDossierId: dossierId },
-      include: { requiredDocumentDefinition: true },
-      orderBy: { createdAt: 'asc' },
-    })
+    const [slots, wrappingVariation] = await Promise.all([
+      tx.regDossierDocumentSlot.findMany({
+        where: { regDossierId: dossierId },
+        include: { requiredDocumentDefinition: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      // testing-correction-explanation.md §1.2 — the same real signal
+      // `RegWorkflowGuards`' own status-sync function already trusts:
+      // only a genuine `RegVariation` row proves this dossier is a
+      // variation/renewal, never `RegDossier.productRegistrationId` alone.
+      tx.regVariation.findFirst({ where: { regDossierId: dossierId }, select: { id: true } }),
+    ])
+    const guidanceOnly = wrappingVariation !== null
 
     const results: CompletenessSlotResult[] = slots.map((slot) => {
-      const isMandatory = slot.requiredDocumentDefinition?.isMandatory ?? false
+      const isMandatory = !guidanceOnly && (slot.requiredDocumentDefinition?.isMandatory ?? false)
       const attached = slot.documentId !== null
       return {
         slotId: slot.id,
@@ -77,10 +97,10 @@ export class CompletenessGateService {
         ctdModule: slot.ctdModule,
         isMandatory,
         attached,
-        met: !isMandatory || attached,
+        met: guidanceOnly || !isMandatory || attached,
       }
     })
 
-    return { allowed: results.every((r) => r.met), slots: results }
+    return { allowed: guidanceOnly || results.every((r) => r.met), guidanceOnly, slots: results }
   }
 }

@@ -106,6 +106,11 @@ export class PlatformService {
             name: registration.companyName,
             companyType: registration.companyType,
             homeCountryId: registration.countryId,
+            // testing-correction-explanation.md decision #4 — carried from
+            // the registration wizard; null only for the handful of real
+            // pending registrations that predate this field (see
+            // `CompanyRegistration.companyEmail`'s own schema doc comment).
+            regulatoryContactEmail: registration.companyEmail,
             status: 'active',
           },
         })

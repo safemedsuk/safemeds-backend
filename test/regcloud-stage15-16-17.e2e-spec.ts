@@ -51,6 +51,15 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
     return signatureTokenService.issue(actor.userId)
   }
 
+  /** testing-correction-explanation.md §2.4 — `requireApprovalData` now always needs a real `approvalEvidenceDocumentId` (plus a payment-proof/invoice pair for a fresh registration) before `→ approved` unlocks. */
+  async function uploadDoc(dossierId: string, actor: TestActor, label: string): Promise<string> {
+    const res = await authedWrite(request(httpServer(app)).post(`/api/v1/records/reg_dossier/${dossierId}/documents/upload`), actor)
+      .field('title', label)
+      .attach('file', Buffer.from(label), { filename: `${label}.pdf`, contentType: 'application/pdf' })
+      .expect(201)
+    return res.body.data.document.id as string
+  }
+
   function authed(req: request.Test, actor: TestActor): request.Test {
     return req.set('Cookie', actor.cookieHeader)
   }
@@ -92,6 +101,7 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
       'regulatory.view_all',
       'regulatory.submit',
       'regulatory.manage_variations',
+      'regulatory.manage_obligations',
       'master_data.manage',
       'master_data.view',
       'documents.manage',
@@ -122,7 +132,8 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
     // The complete real reg_registration workflow — 9 states, 11 transitions.
     const defId = randomUUID()
     await testPrisma.workflowDefinition.create({ data: { id: defId, recordType: 'reg_registration', reportTypeId: null, countryId: null, version: 1, status: 'active' } })
-    const stateKeys = ['planning', 'compiling', 'completeness_check', 'submitted', 'query_received', 'responding', 'resubmitted_for_review', 'approved', 'rejected']
+    // testing-correction-explanation.md §2.2/§3.1 — `variation_application`/`renewal_requested` are the two fast-forward entry points a variation/renewal dossier lands at, never reached via a seeded transition (only via `RegVariationService.create()`'s own direct `WorkflowInstance` override) — matching `prisma/workflow.seed-data.ts`'s own real 9-state definition, needed here since this file's own new Phase 4B test files a real renewal.
+    const stateKeys = ['planning', 'compiling', 'completeness_check', 'variation_application', 'renewal_requested', 'submitted', 'query_received', 'responding', 'resubmitted_for_review', 'approved', 'rejected']
     const stateIds = new Map<string, string>()
     await testPrisma.workflowState.createMany({
       data: stateKeys.map((key, idx) => ({
@@ -138,6 +149,8 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
       { from: 'planning', to: 'compiling', requiresSignature: false },
       { from: 'compiling', to: 'completeness_check', requiresSignature: false },
       { from: 'completeness_check', to: 'submitted', requiresSignature: false },
+      { from: 'variation_application', to: 'submitted', requiresSignature: false },
+      { from: 'renewal_requested', to: 'submitted', requiresSignature: false },
       { from: 'submitted', to: 'query_received', requiresSignature: false },
       { from: 'resubmitted_for_review', to: 'query_received', requiresSignature: false },
       { from: 'query_received', to: 'responding', requiresSignature: false },
@@ -183,7 +196,7 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
     return { dossierId, workflowInstanceId }
   }
 
-  async function approveFreshRegistration(registrationNumber: string): Promise<{ dossierId: string; productRegistrationId: string }> {
+  async function approveFreshRegistration(registrationNumber: string, expiresOn = '2031-03-01'): Promise<{ dossierId: string; productRegistrationId: string }> {
     const { dossierId, workflowInstanceId } = await createDossierAndCompile('generic_pharma')
     const submission = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/submissions`), raOfficer).expect(201)
     await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/submissions/${submission.body.data.id}/evidence`), raOfficer)
@@ -193,7 +206,14 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
     await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
       .send({
         toStateKey: 'approved',
-        payload: { registrationNumber, issuedOn: '2026-03-01', expiresOn: '2031-03-01' },
+        payload: {
+          registrationNumber,
+          issuedOn: '2026-03-01',
+          expiresOn,
+          approvalEvidenceDocumentId: await uploadDoc(dossierId, raOfficer, 'approval-letter'),
+          approvalPaymentProofDocumentId: await uploadDoc(dossierId, raOfficer, 'payment-proof'),
+          approvalInvoiceDocumentId: await uploadDoc(dossierId, raOfficer, 'invoice'),
+        },
         signatureToken: await mintSignatureToken(raOfficer),
         intentStatement: 'Approve.',
       })
@@ -254,7 +274,9 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
       // Stage 5's own guard requires the query's own content to already
       // be logged before `submitted → query_received` is allowed.
       const query = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries`), raOfficer)
-        .send({ queryText: 'Please clarify the CPP validity period.' })
+        .field('queryText', 'Please clarify the CPP validity period.')
+        .field('receivedDate', '2026-04-01')
+        .attach('file', Buffer.from('query letter'), { filename: 'query.pdf', contentType: 'application/pdf' })
         .expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'query_received' }).expect(201)
 
@@ -263,6 +285,7 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
 
       const responded = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries/${query.body.data.id}/respond`), raOfficer)
         .field('note', 'The client confirmed the CPP validity directly with the regulator.')
+        .field('respondedDate', '2026-04-10')
         .expect(201)
       expect(responded.body.data.responseNote).toBe('The client confirmed the CPP validity directly with the regulator.')
       expect(responded.body.data.responseDocumentId).toBeNull()
@@ -286,11 +309,16 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
         .attach('file', Buffer.from('proof'), { filename: 'proof.pdf', contentType: 'application/pdf' })
         .expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'submitted' }).expect(201)
-      const query = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries`), raOfficer).send({ queryText: 'x' }).expect(201)
+      const query = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries`), raOfficer)
+        .field('queryText', 'x')
+        .field('receivedDate', '2026-04-01')
+        .attach('file', Buffer.from('query letter'), { filename: 'query.pdf', contentType: 'application/pdf' })
+        .expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'query_received' }).expect(201)
 
       const result = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries/${query.body.data.id}/respond`), raOfficer)
         .field('note', 'Trying to skip the file.')
+        .field('respondedDate', '2026-04-10')
         .expect(400)
       expect(result.body.error.code).toBe('RESPONSE_DOCUMENT_REQUIRED')
     })
@@ -426,7 +454,11 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
         .attach('file', Buffer.from('proof'), { filename: 'proof.pdf', contentType: 'application/pdf' })
         .expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'submitted' }).expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${openQueryDossierId}/queries`), raOfficer).send({ queryText: 'Open query for the dashboard test.' }).expect(201)
+      await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${openQueryDossierId}/queries`), raOfficer)
+        .field('queryText', 'Open query for the dashboard test.')
+        .field('receivedDate', '2026-04-01')
+        .attach('file', Buffer.from('query letter'), { filename: 'query.pdf', contentType: 'application/pdf' })
+        .expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'query_received' }).expect(201)
 
       const dashboard = await authed(request(httpServer(app)).get('/api/v1/reporting/dashboard'), raOfficer).expect(200)
@@ -435,6 +467,53 @@ describe('RegCloud Stages 15–17 — Engagement Model / Reliance Pathways / Rep
       expect(dashboard.body.data.regulatory.upcomingRenewals30d).toBe(1)
       expect(dashboard.body.data.regulatory.upcomingRenewals90d).toBe(1)
       expect(dashboard.body.data.regulatory.openQueries).toBe(1)
+
+      // testing-correction-explanation.md §4.2 — Phase 4B: dossiers by kind, the open-items list, and this month's activity.
+      expect(dashboard.body.data.regulatory.dossiersByKindAndStage).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: 'registration', stage: 'query_received', count: 1 })]),
+      )
+      // The query's own `receivedDate` (2026-04-01) is real-world months in the past relative to whenever this suite actually runs — a genuine long-open query, not a fabricated one.
+      const longOpenQueries = dashboard.body.data.regulatory.openItems.longOpenQueries as { recordType: string; recordId: string; label: string }[]
+      expect(longOpenQueries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ recordType: 'reg_dossier', recordId: openQueryDossierId })]),
+      )
+      expect(dashboard.body.data.regulatory.thisMonthActivity.dossiersSubmitted).toBeGreaterThanOrEqual(1)
+      expect(dashboard.body.data.regulatory.thisMonthActivity.approvalsReceived).toBeGreaterThanOrEqual(1)
+    })
+
+    it('the dashboard surfaces an overdue post-market obligation and an expiring registration with no renewal started, each linkable to its own registration', async () => {
+      // Approved with a real expiry only 30 days out — genuinely "expiring soon," and with no renewal filed against it yet.
+      const soonExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      const { productRegistrationId } = await approveFreshRegistration('PPB-2026-STG17-4', soonExpiry)
+
+      // A real obligation via the real endpoint, due 10 days ago; `create()` always starts a fresh obligation at `pending` regardless of due date (only the daily sweep flips it), so the real `RegPostMarketObligationService.scanAndFlagOverdue()` is invoked directly here — the same real logic the daily BullMQ job runs, not a fabricated end state.
+      await authedWrite(request(httpServer(app)).post('/api/v1/reg-post-market-obligations'), raOfficer)
+        .send({ productRegistrationId, obligationType: 'annual_report', dueAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString() })
+        .expect(201)
+      const { RegPostMarketObligationService } = await import('../src/modules/regulatory/reg-post-market-obligation.service')
+      const { flagged } = await app.get(RegPostMarketObligationService).scanAndFlagOverdue()
+      expect(flagged).toBeGreaterThanOrEqual(1)
+
+      const dashboard = await authed(request(httpServer(app)).get('/api/v1/reporting/dashboard'), raOfficer).expect(200)
+      const overdue = dashboard.body.data.regulatory.openItems.overduePostMarketObligations as { recordType: string; recordId: string; label: string }[]
+      expect(overdue).toEqual(
+        expect.arrayContaining([expect.objectContaining({ recordType: 'product_registration', recordId: productRegistrationId })]),
+      )
+      const expiringNoRenewal = dashboard.body.data.regulatory.openItems.registrationsExpiringSoonWithNoRenewalStarted as {
+        recordType: string
+        recordId: string
+      }[]
+      expect(expiringNoRenewal).toEqual(
+        expect.arrayContaining([expect.objectContaining({ recordType: 'product_registration', recordId: productRegistrationId })]),
+      )
+
+      // Filing a real renewal variation against it removes it from "no renewal started" on the next read.
+      await authedWrite(request(httpServer(app)).post('/api/v1/reg-variations'), raOfficer)
+        .send({ productRegistrationId, variationType: 'renewal' })
+        .expect(201)
+      const dashboardAfter = await authed(request(httpServer(app)).get('/api/v1/reporting/dashboard'), raOfficer).expect(200)
+      const expiringNoRenewalAfter = dashboardAfter.body.data.regulatory.openItems.registrationsExpiringSoonWithNoRenewalStarted as { recordId: string }[]
+      expect(expiringNoRenewalAfter.map((r) => r.recordId)).not.toContain(productRegistrationId)
     })
 
     it('generates a real portfolio status report, findable via the shared Reports list under moduleKey regcloud', async () => {

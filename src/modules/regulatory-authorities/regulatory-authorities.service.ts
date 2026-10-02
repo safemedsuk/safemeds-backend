@@ -52,9 +52,19 @@ export class RegulatoryAuthoritiesService {
     private readonly storageService: StorageService,
   ) {}
 
-  async list(countryId?: string): Promise<RegulatoryAuthority[]> {
+  /**
+   * testing-correction-explanation.md §1.4 — `countryId` now also accepts
+   * several values (a tenant's own operating markets, per
+   * `CompanyMarket`), scoping the dossier-creation/reliance/clinical-trial
+   * pickers to authorities that actually operate somewhere the company
+   * does business — additive: a single value or no value at all behaves
+   * exactly as before, which the platform-admin Country Rules screen
+   * (unfiltered, every country) still relies on.
+   */
+  async list(countryId?: string | string[]): Promise<RegulatoryAuthority[]> {
+    const countryIds = Array.isArray(countryId) ? countryId : countryId ? [countryId] : null
     return this.prisma.regulatoryAuthority.findMany({
-      where: countryId ? { countryId } : undefined,
+      where: countryIds ? { countryId: { in: countryIds } } : undefined,
       orderBy: [{ country: { name: 'asc' } }, { code: 'asc' }],
     })
   }

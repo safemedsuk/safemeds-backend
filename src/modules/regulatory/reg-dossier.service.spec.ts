@@ -406,3 +406,66 @@ describe('RegDossierService.list — location scoping (Stage 0.6)', () => {
     )
   })
 })
+
+describe('RegDossierService.list — kind derivation (§2.5)', () => {
+  it('a dossier with no wrapping RegVariation is kind "registration", variation null', async () => {
+    const { service, regDossierFindMany } = buildHarness()
+    regDossierFindMany.mockResolvedValue([
+      { id: 'd1', product: { brandName: 'Amoxiclav' }, regVariation: null },
+    ])
+
+    const result = await service.list(actor, { page: 1, limit: 25 })
+
+    expect(result.data[0].kind).toBe('registration')
+    expect(result.data[0].variation).toBeNull()
+  })
+
+  it('a dossier wrapped by variationType "renewal" is kind "renewal"', async () => {
+    const { service, regDossierFindMany } = buildHarness()
+    regDossierFindMany.mockResolvedValue([
+      {
+        id: 'd1',
+        product: { brandName: 'Amoxiclav' },
+        regVariation: {
+          id: 'var-1',
+          variationType: 'renewal',
+          displayCode: 'REN-00001-PPB-2026-0142',
+          productRegistrationId: 'reg-1',
+          productRegistration: { registrationNumber: 'PPB-2026-0142' },
+        },
+      },
+    ])
+
+    const result = await service.list(actor, { page: 1, limit: 25 })
+
+    expect(result.data[0].kind).toBe('renewal')
+    expect(result.data[0].variation).toEqual({
+      id: 'var-1',
+      variationType: 'renewal',
+      displayCode: 'REN-00001-PPB-2026-0142',
+      productRegistrationId: 'reg-1',
+      productRegistrationNumber: 'PPB-2026-0142',
+    })
+  })
+
+  it('a dossier wrapped by any non-renewal variationType is kind "variation"', async () => {
+    const { service, regDossierFindMany } = buildHarness()
+    regDossierFindMany.mockResolvedValue([
+      {
+        id: 'd1',
+        product: { brandName: 'Amoxiclav' },
+        regVariation: {
+          id: 'var-1',
+          variationType: 'major',
+          displayCode: 'VAR-00001-PPB-2026-0142',
+          productRegistrationId: 'reg-1',
+          productRegistration: { registrationNumber: 'PPB-2026-0142' },
+        },
+      },
+    ])
+
+    const result = await service.list(actor, { page: 1, limit: 25 })
+
+    expect(result.data[0].kind).toBe('variation')
+  })
+})

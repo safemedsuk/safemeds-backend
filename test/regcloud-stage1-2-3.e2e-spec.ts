@@ -151,7 +151,7 @@ describe('RegCloud Stages 1–3 — Classify & Plan / Compile Dossier / Complete
       const fetched = await authed(request(httpServer(app)).get(`/api/v1/reg-dossiers/${dossier.body.data.id}`), raOfficer).expect(200)
       expect(fetched.body.data.status).toBe('planning')
       expect(fetched.body.data.workflowInstanceId).toBeTruthy()
-      expect(fetched.body.data.completeness).toEqual({ allowed: true, slots: [] })
+      expect(fetched.body.data.completeness).toEqual({ allowed: true, guidanceOnly: false, slots: [] })
     })
   })
 
@@ -185,6 +185,7 @@ describe('RegCloud Stages 1–3 — Classify & Plan / Compile Dossier / Complete
       expect(afterAttach.body.data.status).toBe('compiling')
       expect(afterAttach.body.data.completeness).toEqual({
         allowed: true,
+        guidanceOnly: false,
         slots: [{ slotId, label: 'Certificate of Pharmaceutical Product', ctdModule: null, isMandatory: true, attached: true, met: true }],
       })
     })

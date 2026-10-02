@@ -69,6 +69,26 @@ export class RegEntitiesService {
     })
   }
 
+  /**
+   * testing-correction-explanation.md §4.1 — the bulk-entities importer's
+   * "match an existing manufacturer by name before creating a duplicate"
+   * lookup, mirroring `RiskManagementPlanService.findProductByBrandName()`'s
+   * own exact shape (and its own honest limitation: `Manufacturer.name`
+   * carries no schema-level uniqueness constraint, so this is a
+   * best-effort first match, not a guarantee).
+   */
+  async findManufacturerByName(
+    actor: AuthenticatedUser,
+    name: string,
+  ): Promise<Manufacturer | null> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, (tx) =>
+      tx.manufacturer.findFirst({
+        where: { companyId, name: { equals: name, mode: 'insensitive' }, isActive: true },
+      }),
+    )
+  }
+
   async createManufacturer(
     actor: AuthenticatedUser,
     dto: CreateManufacturerDto,

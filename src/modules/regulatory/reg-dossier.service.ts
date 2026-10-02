@@ -37,8 +37,17 @@ export interface TransitionLogEntry {
 export interface RegVariationSummary {
   id: string
   variationType: string
+  displayCode: string
   productRegistrationId: string
   productRegistrationNumber: string
+}
+
+/** testing-correction-explanation.md §2.5 — the Regulatory Dossiers list's own "Kind" column. Derived the same way `CompletenessGateService`'s `guidanceOnly` flag already is: no wrapping `RegVariation` → `registration`; wrapped, `variationType: 'renewal'` → `renewal`; wrapped, anything else → `variation`. */
+export type RegDossierKind = 'registration' | 'variation' | 'renewal'
+
+export type RegDossierListRow = RegDossierWithSlots & {
+  kind: RegDossierKind
+  variation: RegVariationSummary | null
 }
 
 export type RegDossierDetail = RegDossierWithSlots & {
@@ -47,6 +56,8 @@ export type RegDossierDetail = RegDossierWithSlots & {
   transitionHistory: TransitionLogEntry[]
   /** RegCloud Stage 7 — set only when this dossier is wrapped by a `RegVariation` (a variation/renewal of an existing registration), for the detail page's own header display. Null for a from-scratch registration dossier. */
   variation: RegVariationSummary | null
+  /** testing-correction-explanation.md §2.3/§2.5 — drives the detail page's own stage tracker labels; see `RegDossierListRow.kind`'s own doc comment for how it's derived. */
+  kind: RegDossierKind
   /** RegCloud Stage 15 — this dossier's own override resolved against the company's default; see `EngagementModelService.resolveEffective()`. */
   effectiveEngagementType: EngagementType
 }
@@ -102,7 +113,7 @@ export class RegDossierService {
   async list(
     actor: AuthenticatedUser,
     query: ListRegDossiersQueryDto,
-  ): Promise<PaginatedResult<RegDossierWithSlots>> {
+  ): Promise<PaginatedResult<RegDossierListRow>> {
     const companyId = requireCompany(actor)
     // RegCloud (Phase 12) Stage 0.6 — same `countryIds` composition as
     // `MasterDataService.listRegistrations()`; a dossier's own country
@@ -129,6 +140,12 @@ export class RegDossierService {
             documentSlots: true,
             product: { select: { brandName: true } },
             authority: { select: { name: true, code: true } },
+            // testing-correction-explanation.md §2.5 — the list's own new
+            // "Kind" column needs the same wrapping-RegVariation signal
+            // `get()`/`CompletenessGateService` already use.
+            regVariation: {
+              include: { productRegistration: { select: { registrationNumber: true } } },
+            },
           },
           orderBy: { createdAt: 'desc' },
           skip: (query.page - 1) * query.limit,
@@ -136,7 +153,24 @@ export class RegDossierService {
         }),
         tx.regDossier.count({ where }),
       ])
-      return paginate(rows, total, query)
+      const withKind: RegDossierListRow[] = rows.map(({ regVariation, ...dossier }) => {
+        const variation: RegVariationSummary | null = regVariation
+          ? {
+              id: regVariation.id,
+              variationType: regVariation.variationType,
+              displayCode: regVariation.displayCode,
+              productRegistrationId: regVariation.productRegistrationId,
+              productRegistrationNumber: regVariation.productRegistration.registrationNumber,
+            }
+          : null
+        const kind: RegDossierKind = !variation
+          ? 'registration'
+          : variation.variationType === 'renewal'
+            ? 'renewal'
+            : 'variation'
+        return { ...dossier, kind, variation }
+      })
+      return paginate(withKind, total, query)
     })
   }
 
@@ -171,10 +205,17 @@ export class RegDossierService {
         ? {
             id: variationRow.id,
             variationType: variationRow.variationType,
+            displayCode: variationRow.displayCode,
             productRegistrationId: variationRow.productRegistrationId,
             productRegistrationNumber: variationRow.productRegistration.registrationNumber,
           }
         : null
+
+      const kind: RegDossierKind = !variation
+        ? 'registration'
+        : variation.variationType === 'renewal'
+          ? 'renewal'
+          : 'variation'
 
       return {
         ...found,
@@ -188,6 +229,7 @@ export class RegDossierService {
         workflowInstanceId: workflowInstance?.id ?? null,
         completeness,
         variation,
+        kind,
         effectiveEngagementType,
       }
     })

@@ -89,6 +89,7 @@ export class RegistrationService {
         companyName: dto.companyName,
         companyType: dto.companyType,
         countryId: dto.countryId,
+        companyEmail: dto.companyEmail,
         licenceNumber: dto.licenceNumber,
         adminFullName: dto.adminFullName,
         adminEmail: dto.adminEmail,

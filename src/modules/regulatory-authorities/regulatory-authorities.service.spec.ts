@@ -48,14 +48,28 @@ describe('RegulatoryAuthoritiesService', () => {
     )
   })
 
-  it('list() filters by countryId when given', async () => {
+  it('list() filters by a single countryId when given', async () => {
     const { service, regulatoryAuthority } = buildHarness()
     regulatoryAuthority.findMany.mockResolvedValue([])
 
     await service.list('country-1')
 
     expect(regulatoryAuthority.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { countryId: 'country-1' } }),
+      expect.objectContaining({ where: { countryId: { in: ['country-1'] } } }),
+    )
+  })
+
+  // testing-correction-explanation.md §1.4 — the dossier-creation wizard
+  // (and every other authority picker) now scopes to every one of a
+  // company's own operating markets at once, not just its home country.
+  it('list() filters by several countryIds when given an array — a company operating in more than one market', async () => {
+    const { service, regulatoryAuthority } = buildHarness()
+    regulatoryAuthority.findMany.mockResolvedValue([])
+
+    await service.list(['country-1', 'country-2'])
+
+    expect(regulatoryAuthority.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { countryId: { in: ['country-1', 'country-2'] } } }),
     )
   })
 

@@ -19,8 +19,16 @@ export interface RequestMeta {
   ip?: string
 }
 
-/** Workflow states from which a submission package may be generated — the first attempt at Completeness Check, or a fresh attempt while responding to a regulator query. */
-const GENERATABLE_STATES = new Set(['completeness_check', 'responding'])
+/**
+ * Workflow states from which a submission package may be generated —
+ * the first attempt at Completeness Check, a fresh attempt while
+ * responding to a regulator query, or (testing-correction-explanation.md
+ * §3.1) `renewal_requested` — a renewal dossier's real entry point,
+ * fast-forwarded past Planning/Compiling/Completeness Check entirely,
+ * whose only real action from there is Generate Submission. Without
+ * this, no renewal dossier could ever generate a submission at all.
+ */
+const GENERATABLE_STATES = new Set(['completeness_check', 'responding', 'renewal_requested'])
 
 const REG_SUBMISSION_RECORD_TYPE = 'reg_submission'
 
@@ -256,6 +264,53 @@ export class RegSubmissionService {
         recordType: REG_REGISTRATION_RECORD_TYPE,
         recordId: submission.regDossierId,
         newValue: { submissionId, evidenceDocumentId: upload.document.id },
+        ip: meta.ip,
+      })
+
+      return updated
+    })
+  }
+
+  /**
+   * testing-correction-explanation.md §1.3 — "an evidence file could be
+   * wrong, there should be a means to delete it and resubmit a new one."
+   * `attachEvidence()` itself was already safe to call twice (a plain
+   * `.update()`, no uniqueness guard), but the frontend hid the upload
+   * control entirely the moment `evidenceDocumentId` was set — this is
+   * the explicit, audited removal step that puts it back within reach.
+   * Clears the field rather than deleting the underlying `Document`
+   * row — the wrong file stays retrievable in the audit trail, it's just
+   * no longer *this submission's* evidence.
+   */
+  async removeEvidence(
+    actor: AuthenticatedUser,
+    submissionId: string,
+    meta: RequestMeta,
+  ): Promise<RegSubmission> {
+    const companyId = requireCompany(actor)
+
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const submission = await tx.regSubmission.findFirst({ where: { id: submissionId, companyId } })
+      if (!submission)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' })
+      if (!submission.evidenceDocumentId)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'This submission has no evidence attached',
+        })
+
+      const updated = await tx.regSubmission.update({
+        where: { id: submissionId },
+        data: { evidenceDocumentId: null, dispatchedAt: null, dispatchedBy: null },
+      })
+
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'reg_submission_evidence_removed',
+        recordType: REG_REGISTRATION_RECORD_TYPE,
+        recordId: submission.regDossierId,
+        oldValue: { submissionId, evidenceDocumentId: submission.evidenceDocumentId },
         ip: meta.ip,
       })
 

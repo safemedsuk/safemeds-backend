@@ -48,6 +48,15 @@ describe('RegCloud Stages 8–11 — Obligations / Archive / Licensing / Permits
     return signatureTokenService.issue(actor.userId)
   }
 
+  /** testing-correction-explanation.md §2.4 — `requireApprovalData` now always needs a real `approvalEvidenceDocumentId` (plus a payment-proof/invoice pair for a fresh registration) before `→ approved` unlocks. */
+  async function uploadDoc(dossierId: string, actor: TestActor, label: string): Promise<string> {
+    const res = await authedWrite(request(httpServer(app)).post(`/api/v1/records/reg_dossier/${dossierId}/documents/upload`), actor)
+      .field('title', label)
+      .attach('file', Buffer.from(label), { filename: `${label}.pdf`, contentType: 'application/pdf' })
+      .expect(201)
+    return res.body.data.document.id as string
+  }
+
   function authed(req: request.Test, actor: TestActor): request.Test {
     return req.set('Cookie', actor.cookieHeader)
   }
@@ -188,7 +197,14 @@ describe('RegCloud Stages 8–11 — Obligations / Archive / Licensing / Permits
     await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
       .send({
         toStateKey: 'approved',
-        payload: { registrationNumber, issuedOn: '2026-03-01', expiresOn: '2031-03-01' },
+        payload: {
+          registrationNumber,
+          issuedOn: '2026-03-01',
+          expiresOn: '2031-03-01',
+          approvalEvidenceDocumentId: await uploadDoc(dossierId, raOfficer, 'approval-letter'),
+          approvalPaymentProofDocumentId: await uploadDoc(dossierId, raOfficer, 'payment-proof'),
+          approvalInvoiceDocumentId: await uploadDoc(dossierId, raOfficer, 'invoice'),
+        },
         signatureToken: await mintSignatureToken(raOfficer),
         intentStatement: 'Approve.',
       })

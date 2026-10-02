@@ -94,8 +94,8 @@ describe('RegCloud Admin Configurability — Product Class taxonomy (e2e)', () =
 
     const listedFirst = await authed(request(httpServer(app)).get(`/api/v1/product-classes?authorityId=${authorityId}`), tenantActor).expect(200)
     const listedSecond = await authed(request(httpServer(app)).get(`/api/v1/product-classes?authorityId=${secondAuthorityId}`), tenantActor).expect(200)
-    expect(listedFirst.body.data.map((c: { classKey: string }) => c.classKey)).toContain('generic_pharma')
-    expect(listedSecond.body.data.map((c: { classKey: string }) => c.classKey)).toContain('generic_pharma')
+    expect((listedFirst.body.data as { classKey: string }[]).map((c) => c.classKey)).toContain('generic_pharma')
+    expect((listedSecond.body.data as { classKey: string }[]).map((c) => c.classKey)).toContain('generic_pharma')
   })
 
   it('rejects a duplicate (authorityId, classKey) pair with a real 409', async () => {

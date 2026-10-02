@@ -50,6 +50,15 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
     return signatureTokenService.issue(actor.userId)
   }
 
+  /** testing-correction-explanation.md §2.4 — `requireApprovalData` now always needs a real `approvalEvidenceDocumentId` (and, for a fresh registration, a payment-proof/invoice pair too) before `→ approved` unlocks. */
+  async function uploadDoc(dossierId: string, actor: TestActor, label: string): Promise<string> {
+    const res = await authedWrite(request(httpServer(app)).post(`/api/v1/records/reg_dossier/${dossierId}/documents/upload`), actor)
+      .field('title', label)
+      .attach('file', Buffer.from(label), { filename: `${label}.pdf`, contentType: 'application/pdf' })
+      .expect(201)
+    return res.body.data.document.id as string
+  }
+
   function authed(req: request.Test, actor: TestActor): request.Test {
     return req.set('Cookie', actor.cookieHeader)
   }
@@ -94,7 +103,8 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
     // The complete real reg_registration workflow — 9 states, 11 transitions.
     const defId = randomUUID()
     await testPrisma.workflowDefinition.create({ data: { id: defId, recordType: 'reg_registration', reportTypeId: null, countryId: null, version: 1, status: 'active' } })
-    const stateKeys = ['planning', 'compiling', 'completeness_check', 'submitted', 'query_received', 'responding', 'resubmitted_for_review', 'approved', 'rejected']
+    // testing-correction-explanation.md §2.2/§3.1 — `variation_application`/`renewal_requested` are the two new fast-forward entry points a variation/renewal dossier lands at, never reached via a seeded transition (only via `RegVariationService.create()`'s own direct `WorkflowInstance` override), matching `prisma/workflow.seed-data.ts`'s own real 9-state definition.
+    const stateKeys = ['planning', 'compiling', 'completeness_check', 'variation_application', 'renewal_requested', 'submitted', 'query_received', 'responding', 'resubmitted_for_review', 'approved', 'rejected']
     const stateIds = new Map<string, string>()
     await testPrisma.workflowState.createMany({
       data: stateKeys.map((key, idx) => ({
@@ -110,6 +120,8 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       { from: 'planning', to: 'compiling', requiresSignature: false },
       { from: 'compiling', to: 'completeness_check', requiresSignature: false },
       { from: 'completeness_check', to: 'submitted', requiresSignature: false },
+      { from: 'variation_application', to: 'submitted', requiresSignature: false },
+      { from: 'renewal_requested', to: 'submitted', requiresSignature: false },
       { from: 'submitted', to: 'query_received', requiresSignature: false },
       { from: 'resubmitted_for_review', to: 'query_received', requiresSignature: false },
       { from: 'query_received', to: 'responding', requiresSignature: false },
@@ -231,16 +243,40 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       const blocked = await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
         .send({ toStateKey: 'approved', payload: {} })
         .expect(409)
-      expect(blocked.body.error.message).toMatch(/registration number/i)
+      expect(blocked.body.error.message).toMatch(/approval.*succeeded|approval letter/i)
+
+      const evidenceDocumentId = await uploadDoc(dossierId, raOfficer, 'approval-letter')
+      const paymentProofDocumentId = await uploadDoc(dossierId, raOfficer, 'payment-proof')
+      const invoiceDocumentId = await uploadDoc(dossierId, raOfficer, 'invoice')
+
+      const missingRegNumber = await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
+        .send({ toStateKey: 'approved', payload: { approvalEvidenceDocumentId: evidenceDocumentId, approvalPaymentProofDocumentId: paymentProofDocumentId, approvalInvoiceDocumentId: invoiceDocumentId } })
+        .expect(409)
+      expect(missingRegNumber.body.error.message).toMatch(/registration number/i)
 
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'approved', payload: { registrationNumber: 'PPB-2026-0001', issuedOn: '2026-03-01' } })
+        .send({
+          toStateKey: 'approved',
+          payload: {
+            registrationNumber: 'PPB-2026-0001',
+            issuedOn: '2026-03-01',
+            approvalEvidenceDocumentId: evidenceDocumentId,
+            approvalPaymentProofDocumentId: paymentProofDocumentId,
+            approvalInvoiceDocumentId: invoiceDocumentId,
+          },
+        })
         .expect(403) // signature required
 
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
         .send({
           toStateKey: 'approved',
-          payload: { registrationNumber: 'PPB-2026-0001', issuedOn: '2026-03-01' },
+          payload: {
+            registrationNumber: 'PPB-2026-0001',
+            issuedOn: '2026-03-01',
+            approvalEvidenceDocumentId: evidenceDocumentId,
+            approvalPaymentProofDocumentId: paymentProofDocumentId,
+            approvalInvoiceDocumentId: invoiceDocumentId,
+          },
           signatureToken: await mintSignatureToken(raOfficer),
           intentStatement: 'I approve this registration.',
         })
@@ -283,8 +319,11 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       // Can't move to query_received until the query's own content is logged.
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'query_received' }).expect(409)
 
+      // testing-correction-explanation.md §2.1 — the regulator's own query letter, and a real note+date on response, are both now mandatory.
       const query = await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries`), raOfficer)
-        .send({ queryText: 'Please clarify the CPP validity period.', receivedDate: '2026-04-01' })
+        .field('queryText', 'Please clarify the CPP validity period.')
+        .field('receivedDate', '2026-04-01')
+        .attach('file', Buffer.from('query letter'), { filename: 'query.pdf', contentType: 'application/pdf' })
         .expect(201)
       expect(query.body.data.queryText).toBe('Please clarify the CPP validity period.')
       const queryId = query.body.data.id as string
@@ -296,18 +335,35 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'resubmitted_for_review' }).expect(409)
 
       await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries/${queryId}/respond`), raOfficer)
+        .field('note', 'CPP validity period confirmed as 24 months from date of issue.')
+        .field('respondedDate', '2026-04-10')
         .attach('file', Buffer.from('our response'), { filename: 'response.pdf', contentType: 'application/pdf' })
         .expect(201)
 
       // Responding twice is refused.
       await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${dossierId}/queries/${queryId}/respond`), raOfficer)
+        .field('note', 'Already answered.')
+        .field('respondedDate', '2026-04-11')
         .attach('file', Buffer.from('again'), { filename: 'response2.pdf', contentType: 'application/pdf' })
         .expect(409)
 
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'resubmitted_for_review' }).expect(201)
 
+      const evidenceDocumentId = await uploadDoc(dossierId, raOfficer, 'approval-letter')
+      const paymentProofDocumentId = await uploadDoc(dossierId, raOfficer, 'payment-proof')
+      const invoiceDocumentId = await uploadDoc(dossierId, raOfficer, 'invoice')
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'approved', payload: { registrationNumber: 'PPB-2026-0002' }, signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approved after query resolution.' })
+        .send({
+          toStateKey: 'approved',
+          payload: {
+            registrationNumber: 'PPB-2026-0002',
+            approvalEvidenceDocumentId: evidenceDocumentId,
+            approvalPaymentProofDocumentId: paymentProofDocumentId,
+            approvalInvoiceDocumentId: invoiceDocumentId,
+          },
+          signatureToken: await mintSignatureToken(raOfficer),
+          intentStatement: 'Approved after query resolution.',
+        })
         .expect(201)
 
       const dossierAfter = await authed(request(httpServer(app)).get(`/api/v1/reg-dossiers/${dossierId}`), raOfficer).expect(200)
@@ -336,7 +392,18 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       await generateAndDispatch(initialDossierId)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${initialInstanceId}/transition`), raOfficer).send({ toStateKey: 'submitted' }).expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${initialInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'approved', payload: { registrationNumber: 'PPB-2026-0003', issuedOn: '2026-03-01' }, signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approved.' })
+        .send({
+          toStateKey: 'approved',
+          payload: {
+            registrationNumber: 'PPB-2026-0003',
+            issuedOn: '2026-03-01',
+            approvalEvidenceDocumentId: await uploadDoc(initialDossierId, raOfficer, 'approval-letter'),
+            approvalPaymentProofDocumentId: await uploadDoc(initialDossierId, raOfficer, 'payment-proof'),
+            approvalInvoiceDocumentId: await uploadDoc(initialDossierId, raOfficer, 'invoice'),
+          },
+          signatureToken: await mintSignatureToken(raOfficer),
+          intentStatement: 'Approved.',
+        })
         .expect(201)
 
       const registrations = await authed(request(httpServer(app)).get('/api/v1/registrations'), raOfficer).expect(200)
@@ -351,24 +418,26 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       const renewalDossierId = variation.body.data.regDossier.id as string
       expect(variation.body.data.regDossier.productClass).toBe('generic_pharma')
 
-      const slotId = variation.body.data.regDossier.documentSlots[0]?.id as string
       const fetchedRenewalDossier = await authed(request(httpServer(app)).get(`/api/v1/reg-dossiers/${renewalDossierId}`), raOfficer).expect(200)
       expect(fetchedRenewalDossier.body.data.variation).toMatchObject({ variationType: 'renewal', productRegistrationId: registration.id, productRegistrationNumber: 'PPB-2026-0003' })
+      expect(fetchedRenewalDossier.body.data.status).toBe('renewal_requested')
       const renewalInstanceId = fetchedRenewalDossier.body.data.workflowInstanceId as string
 
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${renewalInstanceId}/transition`), raOfficer).send({ toStateKey: 'compiling' }).expect(201)
-      const upload = await authedWrite(request(httpServer(app)).post(`/api/v1/records/reg_dossier/${renewalDossierId}/documents/upload`), raOfficer)
-        .field('title', 'Renewed CPP scan')
-        .attach('file', Buffer.from('%PDF-1.4 renewed cpp'), { filename: 'cpp-renewed.pdf', contentType: 'application/pdf' })
-        .expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/reg-dossiers/${renewalDossierId}/slots/${slotId}/attach`), raOfficer).send({ documentId: upload.body.data.document.id }).expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${renewalInstanceId}/transition`), raOfficer).send({ toStateKey: 'completeness_check' }).expect(201)
+      // testing-correction-explanation.md §3.1 — a renewal dossier is
+      // fast-forwarded straight past Planning/Compiling/Completeness Check
+      // to Renewal Requested; its only real action from here is Generate
+      // Submission (Stage 4's own mechanism, reused as-is) then Submitted.
       await generateAndDispatch(renewalDossierId)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${renewalInstanceId}/transition`), raOfficer).send({ toStateKey: 'submitted' }).expect(201)
 
-      // Approving a renewal needs no registration number at all (it already has one).
+      // Approving a renewal needs no registration number, payment proof, or invoice at all (it already has one) — only the approval evidence itself.
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${renewalInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'approved', payload: {}, signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Renewal approved.' })
+        .send({
+          toStateKey: 'approved',
+          payload: { approvalEvidenceDocumentId: await uploadDoc(renewalDossierId, raOfficer, 'renewal-approval-letter') },
+          signatureToken: await mintSignatureToken(raOfficer),
+          intentStatement: 'Renewal approved.',
+        })
         .expect(201)
 
       const registrationsAfter = await authed(request(httpServer(app)).get('/api/v1/registrations'), raOfficer).expect(200)
@@ -389,16 +458,29 @@ describe('RegCloud Stages 4–7 — Submit / Query & Assessment / Approval / Var
       await generateAndDispatch(initialDossierId)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer).send({ toStateKey: 'submitted' }).expect(201)
       await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${workflowInstanceId}/transition`), raOfficer)
-        .send({ toStateKey: 'approved', payload: { registrationNumber: 'PPB-2026-0004', issuedOn: '2026-01-01', expiresOn: '2031-01-01' }, signatureToken: await mintSignatureToken(raOfficer), intentStatement: 'Approved.' })
+        .send({
+          toStateKey: 'approved',
+          payload: {
+            registrationNumber: 'PPB-2026-0004',
+            issuedOn: '2026-01-01',
+            expiresOn: '2031-01-01',
+            approvalEvidenceDocumentId: await uploadDoc(initialDossierId, raOfficer, 'approval-letter'),
+            approvalPaymentProofDocumentId: await uploadDoc(initialDossierId, raOfficer, 'payment-proof'),
+            approvalInvoiceDocumentId: await uploadDoc(initialDossierId, raOfficer, 'invoice'),
+          },
+          signatureToken: await mintSignatureToken(raOfficer),
+          intentStatement: 'Approved.',
+        })
         .expect(201)
       const registrations = await authed(request(httpServer(app)).get('/api/v1/registrations'), raOfficer).expect(200)
       const registration = (registrations.body.data as { id: string; registrationNumber: string }[]).find((r) => r.registrationNumber === 'PPB-2026-0004')!
 
-      await authedWrite(request(httpServer(app)).post('/api/v1/reg-variations'), raOfficer).send({ productRegistrationId: registration.id, variationType: 'labeling_change' }).expect(201)
+      // testing-correction-explanation.md §2.2 — `variationType` moved to the real, confirmed 4-category enum (`labeling_change` was the old free-text placeholder value).
+      await authedWrite(request(httpServer(app)).post('/api/v1/reg-variations'), raOfficer).send({ productRegistrationId: registration.id, variationType: 'minor' }).expect(201)
 
       const list = await authed(request(httpServer(app)).get(`/api/v1/reg-variations?productRegistrationId=${registration.id}`), raOfficer).expect(200)
       expect(list.body.data).toHaveLength(1)
-      expect(list.body.data[0].variationType).toBe('labeling_change')
+      expect(list.body.data[0].variationType).toBe('minor')
     })
   })
 

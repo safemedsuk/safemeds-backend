@@ -20,6 +20,10 @@ export class RegisterCompanyDto {
   @IsUUID('7')
   countryId!: string
 
+  /** testing-correction-explanation.md decision #4 — the company's own official email, carried through to `Company.regulatoryContactEmail` on approval. Deliberately distinct from `adminEmail` — the person registering isn't always the permanent regulatory contact. */
+  @IsEmail()
+  companyEmail!: string
+
   @IsString()
   @MinLength(2)
   licenceNumber!: string

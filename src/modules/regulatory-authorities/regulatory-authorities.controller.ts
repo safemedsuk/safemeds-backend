@@ -33,9 +33,9 @@ const MAX_EMBLEM_UPLOAD_BYTES = 2 * 1024 * 1024
 export class RegulatoryAuthoritiesController {
   constructor(private readonly service: RegulatoryAuthoritiesService) {}
 
-  /** Open to any authenticated user — catalog metadata, same treatment as `GET /country-config/*`. */
+  /** Open to any authenticated user — catalog metadata, same treatment as `GET /country-config/*`. `countryId` may repeat (`?countryId=A&countryId=B`) to scope to several operating markets at once — see `RegulatoryAuthoritiesService.list()`'s own doc comment. */
   @Get()
-  list(@Query('countryId') countryId?: string) {
+  list(@Query('countryId') countryId?: string | string[]) {
     return this.service.list(countryId)
   }
 

@@ -129,6 +129,15 @@ describe('RegSubmissionService.generate', () => {
     expect(regSubmissionCreate).toHaveBeenCalled()
   })
 
+  /** testing-correction-explanation.md §3.1 — a renewal dossier is fast-forwarded straight to `renewal_requested`, skipping Planning/Compiling/Completeness Check entirely; without this, its only real action (Generate Submission) could never be taken at all. */
+  it('allows generation from renewal_requested — a renewal dossier\'s real entry point', async () => {
+    const { service, workflowInstanceFindFirst, regSubmissionCreate } = buildHarness()
+    workflowInstanceFindFirst.mockResolvedValue({ currentState: { stateKey: 'renewal_requested' } })
+
+    await service.generate(actor, 'dossier-1', {})
+    expect(regSubmissionCreate).toHaveBeenCalled()
+  })
+
   it('defaults the channel to paper_pdf when no active SubmissionFormat resolves', async () => {
     const { service, regSubmissionCreate } = buildHarness()
 
@@ -228,5 +237,53 @@ describe('RegSubmissionService.attachEvidence', () => {
         dispatchedBy: 'user-1',
       },
     })
+  })
+})
+
+describe('RegSubmissionService.removeEvidence', () => {
+  it('404s when the submission does not exist', async () => {
+    const { service, regSubmissionFindFirst } = buildHarness()
+    regSubmissionFindFirst.mockResolvedValue(null)
+
+    await expect(service.removeEvidence(actor, 'sub-1', {})).rejects.toMatchObject({
+      response: { code: 'NOT_FOUND' },
+    })
+  })
+
+  it('404s when the submission has no evidence attached yet', async () => {
+    const { service, regSubmissionFindFirst } = buildHarness()
+    regSubmissionFindFirst.mockResolvedValue({
+      id: 'sub-1',
+      regDossierId: 'dossier-1',
+      evidenceDocumentId: null,
+    })
+
+    await expect(service.removeEvidence(actor, 'sub-1', {})).rejects.toMatchObject({
+      response: { code: 'NOT_FOUND' },
+    })
+  })
+
+  it('clears evidenceDocumentId, dispatchedAt, and dispatchedBy, and audits the removal', async () => {
+    const { service, regSubmissionFindFirst, regSubmissionUpdate, auditLog } = buildHarness()
+    regSubmissionFindFirst.mockResolvedValue({
+      id: 'sub-1',
+      regDossierId: 'dossier-1',
+      evidenceDocumentId: 'doc-wrong-file',
+    })
+
+    await service.removeEvidence(actor, 'sub-1', {})
+
+    expect(regSubmissionUpdate).toHaveBeenCalledWith({
+      where: { id: 'sub-1' },
+      data: { evidenceDocumentId: null, dispatchedAt: null, dispatchedBy: null },
+    })
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'reg_submission_evidence_removed',
+        recordId: 'dossier-1',
+        oldValue: { submissionId: 'sub-1', evidenceDocumentId: 'doc-wrong-file' },
+      }),
+    )
   })
 })
