@@ -1,0 +1,48 @@
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
+import type { Request } from 'express'
+
+import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
+import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { AssemblePqrDto, ReviewPqrDto } from './dto/pqr.dto'
+import { PqrService } from './pqr.service'
+
+@ApiTags('quality-pqr')
+@Controller('quality/pqr')
+export class PqrController {
+  constructor(private readonly service: PqrService) {}
+
+  @RequirePermissions('quality.view_pqr')
+  @Get()
+  list(@CurrentUser() user: AuthenticatedUser, @Query('productId') productId?: string) {
+    return this.service.list(user, productId)
+  }
+
+  @RequirePermissions('quality.view_pqr')
+  @Get(':id')
+  get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.get(user, id)
+  }
+
+  @RequirePermissions('quality.view_pqr')
+  @Post('assemble')
+  assemble(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: AssemblePqrDto,
+    @Req() req: Request,
+  ) {
+    return this.service.assemble(user, dto, { ip: req.ip })
+  }
+
+  @RequirePermissions('quality.manage_pqr')
+  @Post(':id/review')
+  review(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ReviewPqrDto,
+    @Req() req: Request,
+  ) {
+    return this.service.review(user, id, dto, { ip: req.ip })
+  }
+}

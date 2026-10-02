@@ -6,6 +6,8 @@ import { Queue } from 'bullmq'
 import { EnvConfig } from '../../config/env.validation'
 import { AuditModule } from '../audit/audit.module'
 import { TasksModule } from '../tasks/tasks.module'
+import { TrainingComplianceController } from './training-compliance.controller'
+import { TrainingComplianceService } from './training-compliance.service'
 import { TrainingRecordController } from './training-record.controller'
 import { TrainingRecordService } from './training-record.service'
 import { TRAINING_REMINDER_QUEUE, TrainingReminderProcessor } from './training-reminder.processor'
@@ -37,14 +39,15 @@ const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000
       useFactory: redisConnectionFactory,
     }),
   ],
-  controllers: [TrainingRecordController, TrainingTypeController],
+  controllers: [TrainingRecordController, TrainingTypeController, TrainingComplianceController],
   providers: [
     TrainingRecordService,
     TrainingReminderService,
     TrainingReminderProcessor,
     TrainingTypeService,
+    TrainingComplianceService,
   ],
-  exports: [TrainingRecordService],
+  exports: [TrainingRecordService, TrainingComplianceService],
 })
 export class TrainingModule implements OnModuleInit {
   constructor(
