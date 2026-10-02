@@ -35,6 +35,7 @@ import { PsmfModule } from './modules/psmf/psmf.module'
 import { PublicReportingModule } from './modules/public-reporting/public-reporting.module'
 import { PvModule } from './modules/pv/pv.module'
 import { QppvNominationModule } from './modules/qppv-nomination/qppv-nomination.module'
+import { QualityModule } from './modules/quality/quality.module'
 import { RbacAdminModule } from './modules/rbac-admin/rbac-admin.module'
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module'
 import { RecordVersioningModule } from './modules/record-versioning/record-versioning.module'
@@ -130,6 +131,8 @@ import { PrismaModule } from './prisma/prisma.module'
     InternalAuditModule,
     QppvNominationModule,
     SdeaModule,
+    // QualCloud (Phase 13), Stage 0 — Foundation Layer.
+    QualityModule,
     TrainingModule,
     // VigiCloud Phase 11, Stage 18 — reporting & periodic outputs.
     ReportingModule,
