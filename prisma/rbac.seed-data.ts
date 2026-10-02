@@ -98,6 +98,147 @@ export const PERMISSIONS: PermissionSeed[] = [
     description: 'Approve/close deviations, CAPAs, changes, SOPs (signature-gated)',
   },
   { key: 'quality.view_all', description: "View all of the company's quality records" },
+  // QualCloud (Phase 13) Stage 0.4 — the Foundation Layer's own new
+  // master-data/document/risk entities each get their own dedicated
+  // manage permission rather than overloading `quality.log_deviation`/
+  // `quality.manage_capa` (deviation/CAPA-shaped actions) — a supplier
+  // approval, an equipment qualification record, or a controlled
+  // document is a materially different action from logging a
+  // deviation, even though the same QUALITY_ASSOCIATE/QUALITY_MANAGER
+  // roles hold all of them today.
+  {
+    key: 'quality.manage_suppliers',
+    description: 'Manage the approved-supplier/vendor register and qualification status',
+  },
+  {
+    key: 'quality.manage_equipment',
+    description: 'Manage the equipment register, qualification status, and calibration schedule',
+  },
+  {
+    key: 'quality.manage_documents',
+    description: 'Create and manage controlled documents (SOPs) and specifications',
+  },
+  {
+    key: 'quality.manage_recalls',
+    description: 'Manage product recalls and recall investigations',
+  },
+  // QualCloud (Phase 13) Stage 10.8 — the real RECALL.CREATE/EDIT and
+  // SCOPE.EDIT persona from the Engineering Build Package's own
+  // permission matrix: day-to-day drafting/logging across the whole
+  // recall lifecycle (countries, scope drafts, distribution,
+  // stakeholders, sightings, the external portal, messages,
+  // quarantine/returns, reconciliation calculation, discrepancy
+  // logging, destruction progression, effectiveness checks) —
+  // deliberately distinct from `quality.manage_recalls` (kept, now
+  // scoped to the two "generate an official archived output" actions:
+  // the compliance pack and the mock-recall readiness export) and from
+  // the narrower sign-off-shaped `quality.approve_recall_scope`/
+  // `quality.approve_recall_exception` pair.
+  {
+    key: 'quality.log_recall',
+    description: 'Draft and log day-to-day recall case management (countries, scope, distribution, portal, quarantine/returns, reconciliation)',
+  },
+  // QualCloud (Phase 13) Stage 10.5 — two deliberately narrower,
+  // sign-off-shaped actions carved out of the broader
+  // `quality.manage_recalls` (Head-of-Quality-only, matching that
+  // permission's own established `quality.manage_batch_release`-style
+  // "approval-level action" precedent): freezing a scope version and
+  // approving a blocking-discrepancy exception are both real,
+  // e-signature-adjacent compliance decisions on top of ordinary recall
+  // case management, not a bigger blast radius, but a distinct one —
+  // held by the same role (`QUALITY_MANAGER`) as `quality.manage_recalls`
+  // today, split out so a future role split (e.g. a QP-equivalent
+  // approver distinct from whoever runs the case day to day) doesn't
+  // need a breaking permission rename.
+  {
+    key: 'quality.approve_recall_scope',
+    description: 'Freeze a recall’s product/batch scope version, making it immutable',
+  },
+  {
+    key: 'quality.approve_recall_exception',
+    description: 'Approve an exception on a blocking recall reconciliation discrepancy',
+  },
+  {
+    key: 'quality.manage_batch_release',
+    description: 'Manage batch release/QP disposition decisions',
+  },
+  {
+    key: 'quality.manage_validation',
+    description: 'Manage validation/qualification protocols and reports',
+  },
+  { key: 'quality.view_pqr', description: 'View Product Quality Reviews' },
+  // QualCloud (Phase 13) Stage 7 — the QA *batch-record* review/
+  // disposition, deliberately distinct from `quality.manage_batch_release`
+  // (Stage 17's own, later, more senior Qualified-Person release gate —
+  // never conflated with this one, see `BatchRecordReview`'s own schema
+  // doc comment).
+  {
+    key: 'quality.review_batch_records',
+    description: 'Review executed batch records and record a QA disposition (pre-QP)',
+  },
+  // QualCloud (Phase 13) Stage 8 — Metrics, Trending & Management Review.
+  {
+    key: 'quality.view_metrics',
+    description: 'View quality metrics, trend flags, and management review history',
+  },
+  {
+    key: 'quality.manage_management_review',
+    description: 'Schedule management reviews and record their agreed actions',
+  },
+  // QualCloud (Phase 13) Stage 11 — the sign-off-shaped supplier
+  // approval decision, carved out of the broader `quality.manage_suppliers`
+  // (drafting-level: assess, schedule a qualification audit, monitor/
+  // flag performance), matching the exact `quality.approve_recall_scope`/
+  // `quality.manage_recalls` split precedent — a QUALITY_MANAGER-only
+  // approval-level action, not a bigger blast radius than
+  // `quality.manage_suppliers`, but a distinct one.
+  {
+    key: 'quality.approve_suppliers',
+    description: 'Approve or suspend/disqualify a supplier\'s approval status',
+  },
+  // QualCloud (Phase 13) Stage 13 — Product Quality Review & Quality
+  // Risk Management. `quality.view_pqr` (pre-existing since Stage 0.4)
+  // already covers viewing an assembled/reviewed PQR; this is the
+  // distinct, signature-gated review/sign-off action, matching
+  // `quality.manage_management_review`'s own "assembling/viewing is
+  // broader than formally signing off" split.
+  {
+    key: 'quality.manage_pqr',
+    description: 'Assemble, review, and sign off Product Quality Reviews',
+  },
+  // QualCloud (Phase 13) Stage 15 — Pharmaceutical Waste Management.
+  // Granted to both quality roles, matching `quality.manage_suppliers`/
+  // `quality.manage_equipment`'s own symmetric precedent — logging a
+  // disposal and witnessing one are both ordinary quality operations,
+  // not a senior-only sign-off the way `quality.manage_batch_release` is.
+  {
+    key: 'quality.manage_waste_disposal',
+    description: 'Log pharmaceutical waste disposal records and sign as a destruction witness',
+  },
+  // QualCloud (Phase 13) Stage 16 — Falsified & Substandard Product
+  // Handling. Same symmetric grant as `quality.manage_waste_disposal`
+  // above — reporting, confirming, dismissing, and closing a falsified-
+  // product report are all ordinary quality-operations actions here,
+  // not split into a separate drafting/approval pair the way CAPA/
+  // recall/supplier-approval are.
+  {
+    key: 'quality.manage_falsified_reports',
+    description: 'Report, confirm, dismiss, and close falsified/substandard product reports',
+  },
+  // QualCloud (Phase 13) Stage 19 — Environmental Monitoring &
+  // Stability Programme. Symmetric grant to both quality roles, same
+  // "ordinary quality operations, not a senior-only sign-off" rationale
+  // as `quality.manage_waste_disposal`/`quality.manage_falsified_reports`
+  // above — logging an EM reading or a stability timepoint result is a
+  // routine QA action, not an approval decision.
+  {
+    key: 'quality.manage_environmental_monitoring',
+    description: 'Log environmental monitoring results and review excursions',
+  },
+  {
+    key: 'quality.manage_stability',
+    description: 'Create stability studies and record stability timepoint results',
+  },
 
   // ── Tenant: regulatory affairs (Phase 4/7) ──────────────────────────────
   {
@@ -184,6 +325,16 @@ export const PERMISSIONS: PermissionSeed[] = [
   {
     key: 'regulatory.manage_promotional_material',
     description: 'Submit and review promotional/advertising material for regulatory approval',
+  },
+  // testing-correction-explanation.md §3.3 — real endpoint since 26 Sep
+  // 2026 (`RegRetentionController`). Deliberately its own permission, not
+  // folded into `regulatory.manage_renewals`/`regulatory.manage_variations`
+  // — paying and logging an annual retention fee is a distinct, routine
+  // action a company may want to grant separately from substantive
+  // variation/renewal filing authority.
+  {
+    key: 'regulatory.manage_retentions',
+    description: "Log a registration's annual retention (invoice, proof of payment) and receive its certificate",
   },
 
   // ── Tenant: cross-domain ─────────────────────────────────────────────────
@@ -301,6 +452,20 @@ export const PERMISSIONS: PermissionSeed[] = [
     key: 'platform.rbac.manage',
     description: 'Create/edit permissions and roles, and change which permissions a role carries',
   },
+  // QualCloud (Phase 13) Stage 10.1 — the recall country rules engine's
+  // own admin/platform half. Deliberately its own, narrower permission
+  // rather than folding into `platform.config.manage` — a recall
+  // rule-set is a distinct rule domain (recall obligations, not
+  // ADR-reporting/registration-renewal deadlines) with its own real
+  // sign-off author, Dr. Miano (the Country Rules Content Pack's own
+  // named `regulatory_lead` persona), held only by `regulatory_lead`,
+  // never `super_admin` alone, matching that role's own established
+  // narrow-scope precedent.
+  {
+    key: 'platform.recall_rules.manage',
+    description:
+      'Author and sign off recall country rule-sets (per-country recall obligation deadlines and submission templates)',
+  },
 ]
 
 export const ROLES: RoleSeed[] = [
@@ -413,6 +578,18 @@ export const ROLES: RoleSeed[] = [
       'pv.view_all',
       'pv.manage_clinical_trials',
       'pv.unblind_treatment',
+      // Real-usage request, 22 Sep 2026 — "a QPPV should be able to do
+      // quality checks." `pv.qc_review` was previously
+      // `QUALITY_ASSOCIATE`-only; withholding it from QPPV was never a
+      // deliberate segregation-of-duties decision, just an oversight —
+      // the actual self-certification risk (a reviewer clearing their
+      // own causality assessment) is already independently enforced,
+      // per case, by the four-eyes workflow guard on
+      // narrative→quality_check (`PvWorkflowGuards`), which blocks the
+      // *specific actor* who assessed a case from also being the one
+      // who clears its QC, regardless of which roles hold this
+      // permission in the abstract.
+      'pv.qc_review',
       'signatures.read',
       'master_data.view',
       'documents.view',
@@ -526,6 +703,45 @@ export const ROLES: RoleSeed[] = [
       // review is).
       'rmp.view',
       'safety_alerts.view',
+      // QualCloud (Phase 13) Stage 0.4 — drafting/logging-level quality
+      // master data (suppliers, equipment, controlled documents) and
+      // PQR viewing, matching this role's own established
+      // "logs/drafts, doesn't close/approve" stance
+      // (`quality.close_capa`/`quality.manage_recalls`/
+      // `quality.manage_validation` stay withheld here on purpose,
+      // same split as `quality.log_deviation` vs. `quality.close_capa`
+      // above). `quality.manage_batch_release` is deliberately granted
+      // to no role yet — the todo-qualcloud.md plan itself names this
+      // Qualified-Person-only, deferred to Stage 17's own real QP gate
+      // rather than guessed at here.
+      'quality.manage_suppliers',
+      'quality.manage_equipment',
+      'quality.manage_documents',
+      'quality.view_pqr',
+      'quality.review_batch_records',
+      // QualCloud (Phase 13) Stage 8 — this role can see the metrics/
+      // trend picture, but scheduling/deciding a formal management
+      // review stays a QUALITY_MANAGER-only leadership action (below).
+      'quality.view_metrics',
+      // QualCloud (Phase 13) Stage 10.8 — RECALL.CREATE/EDIT/SCOPE.EDIT
+      // (`quality.log_recall`, drafting-level day-to-day recall case
+      // management) plus `regulatory.view_all`, closing a real gap
+      // found while wiring this: without it, this role could log every
+      // recall sub-mechanism this stage builds but couldn't actually
+      // see the parent `Recall` row itself (`GET /recalls`/`GET
+      // /recalls/:id` were `regulatory.view_all`-gated only, held
+      // exclusively by Regulatory Affairs Officer until now).
+      // `quality.manage_recalls`/`quality.approve_recall_scope`/
+      // `quality.approve_recall_exception` (the sign-off-shaped
+      // actions) stay withheld here, same "logs, doesn't approve"
+      // split as everything else on this role.
+      'quality.log_recall',
+      'regulatory.view_all',
+      // QualCloud (Phase 13) Stage 15/16.
+      'quality.manage_waste_disposal',
+      'quality.manage_falsified_reports',
+      'quality.manage_environmental_monitoring',
+      'quality.manage_stability',
     ],
   },
   {
@@ -569,6 +785,53 @@ export const ROLES: RoleSeed[] = [
       // judgment-call stance this role already takes on `pv.*`.
       'rmp.view',
       'safety_alerts.view',
+      // QualCloud (Phase 13) Stage 0.4 — Quality Manager is Head of
+      // Quality, so unlike QUALITY_ASSOCIATE this role also gets
+      // `quality.manage_recalls`/`quality.manage_validation` (approval-
+      // level actions, matching the `quality.close_capa` split it
+      // already holds). `quality.manage_batch_release` stays withheld
+      // here too — see the QUALITY_ASSOCIATE comment above, deferred to
+      // Stage 17's real Qualified-Person gate.
+      'quality.manage_suppliers',
+      'quality.manage_equipment',
+      'quality.manage_documents',
+      'quality.manage_recalls',
+      // Stage 10.5 — the two sign-off-shaped recall actions carved out
+      // of the above, same role.
+      'quality.approve_recall_scope',
+      'quality.approve_recall_exception',
+      // Stage 10.8 — the same drafting-level permission QUALITY_ASSOCIATE
+      // now holds too (Head of Quality can obviously also do the
+      // day-to-day logging, not just approve it) plus `regulatory.view_all`,
+      // closing the same real "couldn't see the parent Recall row"
+      // gap documented on QUALITY_ASSOCIATE above.
+      'quality.log_recall',
+      'regulatory.view_all',
+      'quality.manage_validation',
+      'quality.view_pqr',
+      'quality.review_batch_records',
+      // QualCloud (Phase 13) Stage 8 — the real ICH Q10 management-review
+      // owner ("Head of Quality").
+      'quality.view_metrics',
+      'quality.manage_management_review',
+      // QualCloud (Phase 13) Stage 11 — the sign-off-shaped supplier
+      // approval decision (`quality.manage_suppliers`, drafting-level,
+      // is already held above).
+      'quality.approve_suppliers',
+      // QualCloud (Phase 13) Stage 12 — Training & Competency
+      // Management: curriculum definition and recording competency
+      // assessments are both kept at this role's own established
+      // "manage" level — `training.manage` is already held above
+      // (Stage 16.6), so no new grant is needed here, just the usage.
+      // QualCloud (Phase 13) Stage 13 — Product Quality Review sign-off
+      // (`quality.view_pqr`, assembling/viewing a draft, is already
+      // held by both quality roles).
+      'quality.manage_pqr',
+      // QualCloud (Phase 13) Stage 15/16.
+      'quality.manage_waste_disposal',
+      'quality.manage_falsified_reports',
+      'quality.manage_environmental_monitoring',
+      'quality.manage_stability',
     ],
   },
   {
@@ -597,6 +860,17 @@ export const ROLES: RoleSeed[] = [
       'regulatory.manage_recalls',
       'regulatory.manage_obligations',
       'regulatory.manage_promotional_material',
+      'regulatory.manage_retentions',
+      // QualCloud (Phase 13) Stage 10.8 — preserves this role's own
+      // pre-existing ability to create/log a recall
+      // (`quality.log_recall`, shared with the two Quality roles) and
+      // adds `quality.view_all` so the QualCloud-owned sub-mechanisms
+      // this role needs to see in order to generate a regulator
+      // submission (countries, scope, reconciliation, etc.) are
+      // actually visible — `regulatory.manage_recalls` itself is now
+      // scoped narrowly to SUBMISSION.GENERATE/mark-submitted only.
+      'quality.log_recall',
+      'quality.view_all',
       // `pv.view_all` added Stage 1 — this role is the required actor for
       // the seeded pv_case workflow's final submission_ready→submitted
       // transition, so it must be able to see the case it's submitting.
@@ -726,6 +1000,13 @@ export const ROLES: RoleSeed[] = [
     description:
       'Field/regulatory domain expert — confirms and maintains country config. No tenant-administrative access (no registration review, no suspend, no staff management).',
     isPlatform: true,
-    permissions: ['platform.config.manage', 'platform.audit.read', 'records.view_all'],
+    permissions: [
+      'platform.config.manage',
+      'platform.audit.read',
+      'records.view_all',
+      // Stage 10.1 — Dr. Miano's own real persona: extracts and signs
+      // off the recall country rules engine's own rule-sets.
+      'platform.recall_rules.manage',
+    ],
   },
 ]

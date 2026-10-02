@@ -6,18 +6,25 @@ import { Queue } from 'bullmq'
 import { EnvConfig } from '../../config/env.validation'
 import { AuditModule } from '../audit/audit.module'
 import { DocumentsModule } from '../documents/documents.module'
+import { EntitlementsModule } from '../entitlements/entitlements.module'
+import { GovernanceModule } from '../governance/governance.module'
+import { InternalAuditModule } from '../internal-audit/internal-audit.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { WorkflowModule } from '../workflow/workflow.module'
 import { BenefitRiskController } from './benefit-risk.controller'
 import { BenefitRiskService } from './benefit-risk.service'
+import { CrossModuleDashboardController } from './cross-module-dashboard.controller'
+import { CrossModuleReadinessService } from './cross-module-readiness.service'
 import { DashboardController } from './dashboard.controller'
 import { DashboardService } from './dashboard.service'
+import { ExecutiveDashboardService } from './executive-dashboard.service'
 import { LineListingController } from './line-listing.controller'
 import { LineListingService } from './line-listing.service'
 import {
   LINE_LISTING_SCHEDULE_QUEUE,
   LineListingScheduleProcessor,
 } from './line-listing-schedule.processor'
+import { ObligationsFeedService } from './obligations-feed.service'
 import { PeriodicReportController } from './periodic-report.controller'
 import { PeriodicReportService } from './periodic-report.service'
 import { PeriodicReportPdfService } from './periodic-report-pdf.service'
@@ -51,6 +58,9 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
     DocumentsModule,
     NotificationsModule,
     WorkflowModule,
+    EntitlementsModule,
+    InternalAuditModule,
+    GovernanceModule,
     BullModule.registerQueueAsync({
       name: LINE_LISTING_SCHEDULE_QUEUE,
       inject: [ConfigService],
@@ -59,6 +69,7 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
   ],
   controllers: [
     DashboardController,
+    CrossModuleDashboardController,
     LineListingController,
     PeriodicReportController,
     BenefitRiskController,
@@ -68,6 +79,9 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
   ],
   providers: [
     DashboardService,
+    CrossModuleReadinessService,
+    ObligationsFeedService,
+    ExecutiveDashboardService,
     LineListingService,
     LineListingScheduleProcessor,
     PeriodicReportPdfService,

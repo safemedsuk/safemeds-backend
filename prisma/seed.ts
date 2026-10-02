@@ -26,8 +26,10 @@ import {
   UGANDA_ADR_REPORTING_RULE_CANDIDATES,
   UGANDA_CLINICAL_TRIAL_SAE_REPORTING_RULE_CANDIDATES,
 } from './country-rules.seed-data'
+import { INSPECTION_CHECKLIST_SECTIONS } from './inspection-checklist.seed-data'
 import { MEDDRA_SOCS, MEDDRA_VERSION_LABEL, MEDDRA_VERSION_RELEASED_ON } from './meddra.seed-data'
 import { PERMISSIONS, ROLES } from './rbac.seed-data'
+import { RECALL_RULE_SETS } from './recall-rules.seed-data'
 import {
   WHO_DRUG_TERMS,
   WHO_DRUG_VERSION_LABEL,
@@ -43,6 +45,21 @@ import {
   PV_CASE_WORKFLOW_RECORD_TYPE,
   PV_CASE_WORKFLOW_STATES,
   PV_CASE_WORKFLOW_TRANSITIONS,
+  QUALITY_CHANGE_CONTROL_WORKFLOW_RECORD_TYPE,
+  QUALITY_CHANGE_CONTROL_WORKFLOW_STATES,
+  QUALITY_CHANGE_CONTROL_WORKFLOW_TRANSITIONS,
+  QUALITY_COMPLAINT_WORKFLOW_RECORD_TYPE,
+  QUALITY_COMPLAINT_WORKFLOW_STATES,
+  QUALITY_COMPLAINT_WORKFLOW_TRANSITIONS,
+  QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_RECORD_TYPE,
+  QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_STATES,
+  QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_TRANSITIONS,
+  QUALITY_DEVIATION_WORKFLOW_RECORD_TYPE,
+  QUALITY_DEVIATION_WORKFLOW_STATES,
+  QUALITY_DEVIATION_WORKFLOW_TRANSITIONS,
+  QUALITY_OOS_WORKFLOW_RECORD_TYPE,
+  QUALITY_OOS_WORKFLOW_STATES,
+  QUALITY_OOS_WORKFLOW_TRANSITIONS,
   RECALL_WORKFLOW_RECORD_TYPE,
   RECALL_WORKFLOW_STATES,
   RECALL_WORKFLOW_TRANSITIONS,
@@ -183,16 +200,39 @@ async function seedCountryRulesEngine(): Promise<void> {
   // a code change creates a fresh row rather than renaming the old one,
   // leaving the retired code's row orphaned. Self-heal by deleting any
   // authority row, per seeded country, whose code isn't in today's
-  // AUTHORITIES list for that country and isn't referenced by anything
-  // (safe here because dependent rows are always (re)created below, after
-  // this cleanup runs).
+  // AUTHORITIES list for that country — but only if it's genuinely
+  // orphaned. Found 22 Sep 2026, same bug class this file already
+  // documents twice over (the reporting-rule block, the workflow-
+  // definition block): the old comment here *claimed* "isn't referenced
+  // by anything" without ever actually checking, and a blanket
+  // `deleteMany` threw a real FK violation the moment a non-static
+  // authority (e.g. one created live through the admin "Bring a New
+  // Country Online" console) or a real `RegDossier`/`ReportingRule`/etc.
+  // row referenced it. `RegulatoryAuthority` has 17 separate FK
+  // relations pointing at it — rather than enumerate and count every one,
+  // delete row-by-row and treat a foreign-key violation (P2003) as "still
+  // referenced, leave it," with a loud warning instead of silence.
   for (const countryId of new Set(countryIdByIso.values())) {
     const expectedCodes = AUTHORITIES.filter(
       (a) => countryIdByIso.get(a.countryIso) === countryId,
     ).map((a) => a.code)
-    await prisma.regulatoryAuthority.deleteMany({
+    const candidates = await prisma.regulatoryAuthority.findMany({
       where: { countryId, code: { notIn: expectedCodes } },
+      select: { id: true, code: true },
     })
+    for (const candidate of candidates) {
+      try {
+        await prisma.regulatoryAuthority.delete({ where: { id: candidate.id } })
+      } catch (err) {
+        if ((err as { code?: string }).code === 'P2003') {
+          console.warn(
+            `Skipped deleting orphan-looking RegulatoryAuthority "${candidate.code}" (${candidate.id}) — still referenced by real data.`,
+          )
+        } else {
+          throw err
+        }
+      }
+    }
   }
 
   for (const reportType of REPORT_TYPES) {
@@ -418,6 +458,93 @@ async function seedCountryRulesEngine(): Promise<void> {
   )
 }
 
+/**
+ * QualCloud (Phase 13) Stage 10.9 — the real country-by-country recall
+ * rule content (`recall-rules.seed-data.ts`'s own doc comment carries
+ * the full per-country sourcing). Upserted in place on each row's own
+ * natural key (never delete-then-recreate — this project has hit that
+ * exact bug class twice already for reporting rules and workflow
+ * definitions), so a later re-seed against a database with real
+ * accumulated `RecallRequirement` rows referencing today's live
+ * version stays safe.
+ */
+async function seedRecallRules(): Promise<void> {
+  let ruleSetCount = 0
+  let ruleCount = 0
+
+  for (const ruleSetSeed of RECALL_RULE_SETS) {
+    const country = await prisma.country.findUnique({ where: { isoCode: ruleSetSeed.countryIso } })
+    if (!country) throw new Error(`Unknown country ISO "${ruleSetSeed.countryIso}" in RECALL_RULE_SETS seed`)
+    const authority = await prisma.regulatoryAuthority.findUnique({
+      where: { countryId_code: { countryId: country.id, code: ruleSetSeed.authorityCode } },
+    })
+    if (!authority) {
+      throw new Error(
+        `Unknown authority "${ruleSetSeed.authorityCode}" for country "${ruleSetSeed.countryIso}" in RECALL_RULE_SETS seed`,
+      )
+    }
+
+    let ruleSet = await prisma.recallRuleSet.findFirst({
+      where: { countryId: country.id, regulatoryAuthorityId: authority.id },
+      orderBy: { version: 'desc' },
+    })
+    if (!ruleSet) {
+      ruleSet = await prisma.recallRuleSet.create({
+        data: {
+          id: newId(),
+          countryId: country.id,
+          regulatoryAuthorityId: authority.id,
+          version: 1,
+          status: 'live',
+          signedOffAt: new Date('2026-09-30'),
+          effectiveDate: new Date('2026-09-30'),
+        },
+      })
+      ruleSetCount += 1
+    }
+
+    for (const ruleSeed of ruleSetSeed.rules) {
+      await prisma.recallRule.upsert({
+        where: { ruleSetId_code: { ruleSetId: ruleSet.id, code: ruleSeed.code } },
+        update: {
+          requirementText: ruleSeed.requirementText,
+          appliesWhenClass: ruleSeed.appliesWhenClass ?? null,
+          appliesWhenType: ruleSeed.appliesWhenType ?? null,
+          anchorEvent: ruleSeed.anchorEvent,
+          offset: ruleSeed.offset,
+          dayBasis: ruleSeed.dayBasis,
+          ownerRoleKey: ruleSeed.ownerRoleKey,
+          sourceDoc: ruleSeed.sourceDoc,
+          sourceInstrument: ruleSeed.sourceInstrument ?? null,
+          sourceSection: ruleSeed.sourceSection ?? null,
+          unverified: ruleSeed.unverified,
+        },
+        create: {
+          id: newId(),
+          ruleSetId: ruleSet.id,
+          code: ruleSeed.code,
+          requirementText: ruleSeed.requirementText,
+          appliesWhenClass: ruleSeed.appliesWhenClass ?? null,
+          appliesWhenType: ruleSeed.appliesWhenType ?? null,
+          anchorEvent: ruleSeed.anchorEvent,
+          offset: ruleSeed.offset,
+          dayBasis: ruleSeed.dayBasis,
+          ownerRoleKey: ruleSeed.ownerRoleKey,
+          sourceDoc: ruleSeed.sourceDoc,
+          sourceInstrument: ruleSeed.sourceInstrument ?? null,
+          sourceSection: ruleSeed.sourceSection ?? null,
+          unverified: ruleSeed.unverified,
+        },
+      })
+      ruleCount += 1
+    }
+  }
+
+  console.log(
+    `Seeded ${ruleSetCount} new recall rule-set(s) (Tanzania/TMDA, Rwanda/RFDA, Zimbabwe/MCAZ) with ${ruleCount} rule(s) upserted in place.`,
+  )
+}
+
 interface WorkflowStateSeed {
   key: string
   name: string
@@ -599,6 +726,31 @@ async function seedWorkflowEngine(): Promise<void> {
     PERIODIC_REPORT_WORKFLOW_RECORD_TYPE,
     PERIODIC_REPORT_WORKFLOW_STATES,
     PERIODIC_REPORT_WORKFLOW_TRANSITIONS,
+  )
+  await seedWorkflowDefinition(
+    QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_RECORD_TYPE,
+    QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_STATES,
+    QUALITY_CONTROLLED_DOCUMENT_WORKFLOW_TRANSITIONS,
+  )
+  await seedWorkflowDefinition(
+    QUALITY_DEVIATION_WORKFLOW_RECORD_TYPE,
+    QUALITY_DEVIATION_WORKFLOW_STATES,
+    QUALITY_DEVIATION_WORKFLOW_TRANSITIONS,
+  )
+  await seedWorkflowDefinition(
+    QUALITY_CHANGE_CONTROL_WORKFLOW_RECORD_TYPE,
+    QUALITY_CHANGE_CONTROL_WORKFLOW_STATES,
+    QUALITY_CHANGE_CONTROL_WORKFLOW_TRANSITIONS,
+  )
+  await seedWorkflowDefinition(
+    QUALITY_COMPLAINT_WORKFLOW_RECORD_TYPE,
+    QUALITY_COMPLAINT_WORKFLOW_STATES,
+    QUALITY_COMPLAINT_WORKFLOW_TRANSITIONS,
+  )
+  await seedWorkflowDefinition(
+    QUALITY_OOS_WORKFLOW_RECORD_TYPE,
+    QUALITY_OOS_WORKFLOW_STATES,
+    QUALITY_OOS_WORKFLOW_TRANSITIONS,
   )
 }
 
@@ -787,6 +939,48 @@ async function seedAuditRequirements(): Promise<void> {
 }
 
 /**
+ * QualCloud (Phase 13) Stage 9 — same upsert-on-natural-key discipline
+ * as `seedAuditRequirements()` above, on `(authorityId, sectionKey)`.
+ */
+async function seedInspectionChecklist(): Promise<void> {
+  const ppb = await prisma.regulatoryAuthority.findFirst({ where: { code: 'PPB' } })
+  if (!ppb) {
+    throw new Error(
+      'Kenya PPB authority must be seeded before the inspection checklist (run seedCountryRulesEngine first)',
+    )
+  }
+
+  for (const section of INSPECTION_CHECKLIST_SECTIONS) {
+    await prisma.inspectionChecklistTemplate.upsert({
+      where: { authorityId_sectionKey: { authorityId: ppb.id, sectionKey: section.sectionKey } },
+      create: {
+        id: newId(),
+        authorityId: ppb.id,
+        sectionKey: section.sectionKey,
+        title: section.title,
+        description: section.description,
+        mappedRecordType: section.mappedRecordType,
+        sortOrder: section.sortOrder,
+        guidelineReference: section.guidelineReference ?? null,
+      },
+      update: {
+        title: section.title,
+        description: section.description,
+        mappedRecordType: section.mappedRecordType,
+        sortOrder: section.sortOrder,
+        ...(section.guidelineReference !== undefined
+          ? { guidelineReference: section.guidelineReference }
+          : {}),
+      },
+    })
+  }
+
+  console.log(
+    `Seeded ${INSPECTION_CHECKLIST_SECTIONS.length} inspection-checklist section rows for PPB.`,
+  )
+}
+
+/**
  * Special Corner SC-8 (Admin Configuration Console — training-type
  * catalog) — real seed content for the two markets/scopes this app
  * actually knows about today: Kenya's own GVP Certificate/PPB Academy
@@ -836,6 +1030,35 @@ async function seedTrainingTypes(): Promise<void> {
   }
 
   console.log(`Seeded ${entries.length} training-type catalog entries.`)
+}
+
+/**
+ * QualCloud (Phase 13) Stage 15 — the waste-disposal-method catalog.
+ * Genuinely, honestly generic — no real PPB waste-disposal procedure
+ * document exists anywhere in this project's reference material, so
+ * these five entries are deliberately the plain, jurisdiction-agnostic
+ * default values named on `WasteDisposalRecord.disposalMethod`'s own
+ * schema doc comment, never a fabricated citation. A real PPB-sourced
+ * list can replace/extend these later via
+ * `PATCH /platform/waste-disposal-methods` with zero code change.
+ * Upserted on the real `@@unique([methodKey])` natural key.
+ */
+async function seedWasteDisposalMethods(): Promise<void> {
+  const entries = [
+    { methodKey: 'incineration', label: 'Incineration', sortOrder: 1 },
+    { methodKey: 'encapsulation', label: 'Encapsulation', sortOrder: 2 },
+    { methodKey: 'return_to_supplier', label: 'Return to Supplier', sortOrder: 3 },
+    { methodKey: 'landfill_authorized', label: 'Authorized Landfill', sortOrder: 4 },
+    { methodKey: 'other', label: 'Other', sortOrder: 100 },
+  ]
+  for (const entry of entries) {
+    await prisma.wasteDisposalMethodCatalogEntry.upsert({
+      where: { methodKey: entry.methodKey },
+      create: { id: newId(), ...entry },
+      update: { label: entry.label, sortOrder: entry.sortOrder },
+    })
+  }
+  console.log(`Seeded ${entries.length} waste-disposal-method catalog entries.`)
 }
 
 /**
@@ -987,8 +1210,109 @@ async function seedRegCloudFoundation(): Promise<void> {
     }
   }
 
+  // Real-usage request, 1 Oct 2026 — a clinical trial application dossier
+  // (`RegDossier.productClass = 'clinical_trial'`) had no
+  // `RegulatoryRequirement`/`RequiredDocumentDefinition` rows at all, so
+  // its completeness checklist (`CompletenessGateService`) showed nothing
+  // to upload. "Clinical trial" isn't one of PPB's own 7 named product
+  // classes (`ProductClassDefinition` above, sourced from the Workflow
+  // Map's "Product classes in scope" section) — it's a distinct
+  // *application type*, not a product category, exactly the same
+  // distinction RegCloud Stage 12 already drew by giving clinical trials
+  // their own `ClinicalTrial` model rather than folding them into
+  // `ProductRegistration`. `productClass` stays plain free-text (per its
+  // own schema doc comment, "a market with an unconfigured taxonomy is
+  // never blocked from typing a class name"), so `'clinical_trial'` is a
+  // legitimate value here without needing a schema change, matching the
+  // exact mechanism every other product class's own checklist already
+  // uses. Upserts in place on the natural key (never delete-then-
+  // recreate, matching this seed script's own established discipline —
+  // see CLAUDE.md's reporting-rule-seed gotcha) so a real dossier's
+  // already-created `RegDossierDocumentSlot` rows (which hold their own
+  // FK to a specific `RequiredDocumentDefinition` row) are never
+  // orphaned by a future reseed.
+  const requirementKey = {
+    countryId: kenya.id,
+    authorityId: ppb.id,
+    productClass: 'clinical_trial',
+    route: '*',
+  }
+  let clinicalTrialRequirement = await prisma.regulatoryRequirement.findFirst({
+    where: { ...requirementKey, status: 'active' },
+  })
+  if (!clinicalTrialRequirement) {
+    clinicalTrialRequirement = await prisma.regulatoryRequirement.create({
+      data: {
+        id: newId(),
+        ...requirementKey,
+        description: 'Clinical Trial Application — PPB (Kenya)',
+        unverified: true,
+        sourceReference:
+          'PPB clinical trial application checklist (vigicloud docs/RegCloud discovery material) — document list, not yet checked against a primary-source PPB guideline citation-by-citation.',
+        version: 1,
+        status: 'active',
+        effectiveFrom: new Date('2026-01-01'),
+      },
+    })
+  }
+
+  const clinicalTrialDocuments: {
+    documentKey: string
+    name: string
+    ctdModule: string | null
+  }[] = [
+    { documentKey: 'ct_cover_letter', name: 'Cover Letter (addressed to the PPB Registrar)', ctdModule: 'Module 1' },
+    { documentKey: 'ct_application_form', name: 'Completed Clinical Trial Application Form', ctdModule: 'Module 1' },
+    { documentKey: 'ct_study_protocol', name: "Study Protocol (with versions/dates/amendments)", ctdModule: 'Module 1' },
+    { documentKey: 'ct_investigators_brochure', name: "Investigator's Brochure (IB)", ctdModule: 'Module 1' },
+    {
+      documentKey: 'ct_cmc_impd',
+      name: 'Product Quality/Manufacturing (CMC) Documentation / IMPD',
+      ctdModule: 'Module 3',
+    },
+    {
+      documentKey: 'ct_informed_consent',
+      name: 'Informed Consent Materials (English + local languages)',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_ethical_approval',
+      name: 'Ethical Approval (NACOSTI-accredited SERC clearance certificate)',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_investigator_credentials',
+      name: 'Investigator Credentials (abridged CVs max 4 pages + GCP certificates)',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_admin_legal_documents',
+      name: 'Administrative and Legal Documents (trial insurance, institutional affiliation letters, grant/funding letters, MTAs if applicable)',
+      ctdModule: 'Module 1',
+    },
+    { documentKey: 'ct_fee_payment_evidence', name: 'Evidence of Fee Payment', ctdModule: 'Module 1' },
+  ]
+
+  for (const [index, doc] of clinicalTrialDocuments.entries()) {
+    const docKey = { regulatoryRequirementId: clinicalTrialRequirement.id, documentKey: doc.documentKey }
+    const docData = {
+      name: doc.name,
+      ctdModule: doc.ctdModule,
+      isMandatory: true,
+      sourceReference:
+        'Real-usage request, 1 Oct 2026 — PPB clinical trial application document checklist.',
+      sortOrder: index,
+    }
+    const existingDoc = await prisma.requiredDocumentDefinition.findFirst({ where: docKey })
+    if (existingDoc) {
+      await prisma.requiredDocumentDefinition.update({ where: { id: existingDoc.id }, data: docData })
+    } else {
+      await prisma.requiredDocumentDefinition.create({ data: { id: newId(), ...docKey, ...docData } })
+    }
+  }
+
   console.log(
-    "Seeded RegCloud foundation data: Kenya PPB 5-year registration renewal rule, the reg_dossier report type, an unverified query-response deadline candidate, and PPB's real 7 product classes.",
+    "Seeded RegCloud foundation data: Kenya PPB 5-year registration renewal rule, the reg_dossier report type, an unverified query-response deadline candidate, PPB's real 7 product classes, and the clinical trial application's 10-document completeness checklist.",
   )
 }
 
@@ -1003,11 +1327,14 @@ async function main(): Promise<void> {
   await seedDemoPlatformAdmin()
   await seedRolesAndPermissions()
   await seedCountryRulesEngine()
+  await seedRecallRules()
   await seedWorkflowEngine()
   await seedMeddra()
   await seedWhoDrug()
   await seedAuditRequirements()
+  await seedInspectionChecklist()
   await seedTrainingTypes()
+  await seedWasteDisposalMethods()
   await seedRegCloudFoundation()
 }
 
