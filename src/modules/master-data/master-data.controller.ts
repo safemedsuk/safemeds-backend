@@ -14,6 +14,7 @@ import { ListRegistrationsQueryDto } from './dto/list-registrations-query.dto'
 import { UpdateBatchDto } from './dto/update-batch.dto'
 import { UpdateProductDto } from './dto/update-product.dto'
 import { UpdateProductRegistrationDto } from './dto/update-product-registration.dto'
+import { WithdrawRegistrationDto } from './dto/withdraw-registration.dto'
 import { MasterDataService } from './master-data.service'
 
 @ApiTags('master-data')
@@ -63,6 +64,11 @@ export class MasterDataController {
     return this.masterDataService.listBatches(actor, query)
   }
 
+  @Get('batches/:id')
+  getBatch(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.masterDataService.getBatch(actor, id)
+  }
+
   @RequirePermissions('master_data.manage')
   @Post('batches')
   createBatch(
@@ -102,6 +108,11 @@ export class MasterDataController {
     return this.masterDataService.listRegistrations(actor, query)
   }
 
+  @Get('registrations/:id')
+  getRegistration(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.masterDataService.getRegistration(actor, id)
+  }
+
   @RequirePermissions('master_data.manage')
   @Post('registrations')
   createRegistration(
@@ -123,13 +134,15 @@ export class MasterDataController {
     return this.masterDataService.updateRegistration(actor, id, dto, { ip: req.ip })
   }
 
+  /** testing-correction-explanation.md §3.6 — signature-gated; see `WithdrawRegistrationDto`'s own doc comment. */
   @RequirePermissions('master_data.manage')
-  @Post('registrations/:id/deactivate')
-  deactivateRegistration(
+  @Post('registrations/:id/withdraw')
+  withdrawRegistration(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,
+    @Body() dto: WithdrawRegistrationDto,
     @Req() req: Request,
   ) {
-    return this.masterDataService.deactivateRegistration(actor, id, { ip: req.ip })
+    return this.masterDataService.withdrawRegistration(actor, id, dto, { ip: req.ip })
   }
 }

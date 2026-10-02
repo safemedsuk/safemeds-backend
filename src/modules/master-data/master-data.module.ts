@@ -5,7 +5,9 @@ import { Queue } from 'bullmq'
 
 import { EnvConfig } from '../../config/env.validation'
 import { AuditModule } from '../audit/audit.module'
+import { DocumentsModule } from '../documents/documents.module'
 import { RegulatoryModule } from '../regulatory/regulatory.module'
+import { SignaturesModule } from '../signatures/signatures.module'
 import { TasksModule } from '../tasks/tasks.module'
 import { TenancyModule } from '../tenancy/tenancy.module'
 import { MasterDataController } from './master-data.controller'
@@ -33,6 +35,8 @@ const REMINDER_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
     TasksModule,
     RegulatoryModule,
     TenancyModule,
+    DocumentsModule,
+    SignaturesModule,
     BullModule.registerQueueAsync({
       name: PRODUCT_REVIEW_REMINDER_QUEUE,
       inject: [ConfigService],

@@ -32,6 +32,7 @@ function buildHarness() {
   const batchFindMany = jest.fn().mockResolvedValue([])
   const batchCount = jest.fn().mockResolvedValue(0)
   const batchFindUnique = jest.fn()
+  const batchFindFirst = jest.fn()
   const batchCreate = jest.fn().mockImplementation(({ data }) => Promise.resolve(data))
   const batchUpdate = jest
     .fn()
@@ -64,6 +65,7 @@ function buildHarness() {
       findMany: batchFindMany,
       count: batchCount,
       findUnique: batchFindUnique,
+      findFirst: batchFindFirst,
       create: batchCreate,
       update: batchUpdate,
     },
@@ -92,6 +94,8 @@ function buildHarness() {
   // RegCloud Stage 8 — no-ops for every pre-existing test that doesn't care about it, matching `regDeadlineService`'s own graceful-default precedent above.
   const ensureObligationsForRegistration = jest.fn().mockResolvedValue(undefined)
   const regPostMarketObligationService = { ensureObligationsForRegistration } as never
+  const sign = jest.fn().mockResolvedValue(undefined)
+  const signatureService = { sign } as never
   const service = new MasterDataService(
     rls as never,
     auditService,
@@ -99,6 +103,7 @@ function buildHarness() {
     locationScopeService,
     regFeeLedgerService,
     regPostMarketObligationService,
+    signatureService,
   )
 
   return {
@@ -109,6 +114,7 @@ function buildHarness() {
     productCreate,
     productUpdate,
     batchFindUnique,
+    batchFindFirst,
     batchCreate,
     registrationFindUnique,
     registrationCreate,
@@ -116,6 +122,7 @@ function buildHarness() {
     registrationFindMany,
     getEffectiveAccess,
     ensureObligationsForRegistration,
+    sign,
   }
 }
 
@@ -292,6 +299,23 @@ describe('MasterDataService — batches', () => {
     )
     expect(created.companyId).toBe('company-1')
   })
+
+  it('getBatch() 404s for a nonexistent batch, and returns the real row (including qualityStatus) once found', async () => {
+    const harness = buildHarness()
+    harness.batchFindFirst.mockResolvedValueOnce(null)
+    await expect(harness.service.getBatch(actor, 'nonexistent')).rejects.toMatchObject({
+      response: { code: 'NOT_FOUND' },
+    })
+
+    harness.batchFindFirst.mockResolvedValueOnce({
+      id: 'batch-1',
+      companyId: 'company-1',
+      qualityStatus: 'quarantine',
+      parentBatchIds: [],
+    })
+    const found = await harness.service.getBatch(actor, 'batch-1')
+    expect(found.qualityStatus).toBe('quarantine')
+  })
 })
 
 describe('MasterDataService — product registrations', () => {
@@ -314,21 +338,121 @@ describe('MasterDataService — product registrations', () => {
     expect(created.status).toBe('active')
   })
 
-  it('deactivating a registration sets status to withdrawn, not deleted', async () => {
-    const { service, registrationFindUnique, registrationUpdate, auditLog } = buildHarness()
-    registrationFindUnique.mockResolvedValue({ id: 'reg-1', status: 'active' })
+  describe('getRegistration (§3.7 — the Retention guidance-checklist lookup)', () => {
+    it('returns the registration with its product/authority included', async () => {
+      const { service, registrationFindUnique } = buildHarness()
+      registrationFindUnique.mockResolvedValue({
+        id: 'reg-1',
+        authorityId: 'ppb',
+        productClass: 'generic_pharma',
+        product: { brandName: 'Amoxiclav' },
+        authority: { name: 'Pharmacy and Poisons Board', code: 'PPB' },
+      })
 
-    const result = await service.deactivateRegistration(actor, 'reg-1', {})
+      const result = await service.getRegistration(actor, 'reg-1')
 
-    expect(registrationUpdate).toHaveBeenCalledWith({
-      where: { id: 'reg-1' },
-      data: { status: 'withdrawn' },
+      expect(result.authorityId).toBe('ppb')
+      expect(result.productClass).toBe('generic_pharma')
+      expect(result.product.brandName).toBe('Amoxiclav')
+      expect(registrationFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'reg-1' } }),
+      )
     })
-    expect(result.status).toBe('withdrawn')
-    expect(auditLog).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ action: 'product_registration_withdrawn' }),
-    )
+
+    it('404s for a registration id that does not resolve under this actor', async () => {
+      const { service, registrationFindUnique } = buildHarness()
+      registrationFindUnique.mockResolvedValue(null)
+
+      await expect(service.getRegistration(actor, 'missing')).rejects.toMatchObject({
+        response: { code: 'NOT_FOUND' },
+      })
+    })
+  })
+
+  describe('withdrawRegistration (§3.6)', () => {
+    const withdrawDto = {
+      reason: 'Product discontinued by manufacturer.',
+      intentStatement: 'I am withdrawing this registration.',
+      signatureToken: 'sig-token-1',
+    }
+
+    it('404s when the registration does not exist', async () => {
+      const { service, registrationFindUnique } = buildHarness()
+      registrationFindUnique.mockResolvedValue(null)
+
+      await expect(
+        service.withdrawRegistration(actor, 'reg-1', withdrawDto, {}),
+      ).rejects.toMatchObject({ response: { code: 'NOT_FOUND' } })
+    })
+
+    it('refuses to withdraw an already-withdrawn registration', async () => {
+      const { service, registrationFindUnique } = buildHarness()
+      registrationFindUnique.mockResolvedValue({
+        id: 'reg-1',
+        status: 'withdrawn',
+        expiresOn: new Date('2099-01-01'),
+      })
+
+      await expect(
+        service.withdrawRegistration(actor, 'reg-1', withdrawDto, {}),
+      ).rejects.toMatchObject({ response: { code: 'ALREADY_WITHDRAWN' } })
+    })
+
+    it('refuses to withdraw an already-expired registration — escalate to re-registration instead', async () => {
+      const { service, registrationFindUnique } = buildHarness()
+      registrationFindUnique.mockResolvedValue({
+        id: 'reg-1',
+        status: 'active',
+        expiresOn: new Date('2020-01-01'),
+      })
+
+      await expect(
+        service.withdrawRegistration(actor, 'reg-1', withdrawDto, {}),
+      ).rejects.toMatchObject({ response: { code: 'REGISTRATION_EXPIRED' } })
+    })
+
+    it('requires a real electronic signature before withdrawing, sets status to withdrawn (never deleted), and records the reason/document/actor', async () => {
+      const { service, registrationFindUnique, registrationUpdate, auditLog, sign } = buildHarness()
+      registrationFindUnique.mockResolvedValue({
+        id: 'reg-1',
+        status: 'active',
+        expiresOn: new Date('2099-01-01'),
+      })
+
+      const result = await service.withdrawRegistration(
+        actor,
+        'reg-1',
+        { ...withdrawDto, documentId: 'doc-1' },
+        {},
+      )
+
+      expect(sign).toHaveBeenCalledWith(
+        expect.anything(),
+        actor,
+        expect.objectContaining({
+          recordType: 'product_registration',
+          recordId: 'reg-1',
+          intentStatement: withdrawDto.intentStatement,
+          signatureToken: withdrawDto.signatureToken,
+        }),
+        {},
+      )
+      expect(registrationUpdate).toHaveBeenCalledWith({
+        where: { id: 'reg-1' },
+        data: {
+          status: 'withdrawn',
+          withdrawnAt: expect.any(Date),
+          withdrawnReason: withdrawDto.reason,
+          withdrawnBy: 'user-1',
+          withdrawalDocumentId: 'doc-1',
+        },
+      })
+      expect(result.status).toBe('withdrawn')
+      expect(auditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'product_registration_withdrawn' }),
+      )
+    })
   })
 
   it('filters by expiringWithinDays', async () => {

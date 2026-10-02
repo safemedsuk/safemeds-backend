@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Batch, Prisma, Product, ProductRegistration } from '@prisma/client'
 
 import { newId } from '../../common/id'
@@ -9,6 +9,7 @@ import { AuditService } from '../audit/audit.service'
 import { RegDeadlineService } from '../regulatory/reg-deadline.service'
 import { RegFeeLedgerService } from '../regulatory/reg-fee-ledger.service'
 import { RegPostMarketObligationService } from '../regulatory/reg-post-market-obligation.service'
+import { SignatureService } from '../signatures/signature.service'
 import { LocationScopeService } from '../tenancy/location-scope.service'
 import { CreateBatchDto } from './dto/create-batch.dto'
 import { CreateProductDto } from './dto/create-product.dto'
@@ -19,6 +20,7 @@ import { ListRegistrationsQueryDto } from './dto/list-registrations-query.dto'
 import { UpdateBatchDto } from './dto/update-batch.dto'
 import { UpdateProductDto } from './dto/update-product.dto'
 import { UpdateProductRegistrationDto } from './dto/update-product-registration.dto'
+import { WithdrawRegistrationDto } from './dto/withdraw-registration.dto'
 
 export interface RequestMeta {
   ip?: string
@@ -54,6 +56,7 @@ export class MasterDataService {
     private readonly locationScopeService: LocationScopeService,
     private readonly regFeeLedgerService: RegFeeLedgerService,
     private readonly regPostMarketObligationService: RegPostMarketObligationService,
+    private readonly signatureService: SignatureService,
   ) {}
 
   // ── Products ──────────────────────────────────────────────────────────────
@@ -180,6 +183,21 @@ export class MasterDataService {
 
   // ── Batches ───────────────────────────────────────────────────────────────
 
+  async getBatch(
+    actor: AuthenticatedUser,
+    id: string,
+  ): Promise<Batch & { product: { brandName: string } }> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const found = await tx.batch.findFirst({
+        where: { id, companyId },
+        include: { product: { select: { brandName: true } } },
+      })
+      if (!found) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Batch not found' })
+      return found
+    })
+  }
+
   async listBatches(
     actor: AuthenticatedUser,
     query: ListBatchesQueryDto,
@@ -222,6 +240,10 @@ export class MasterDataService {
           batchNumber: dto.batchNumber,
           manufacturedOn: new Date(dto.manufacturedOn),
           expiresOn: new Date(dto.expiresOn),
+          batchSize: dto.batchSize ?? null,
+          unit: dto.unit ?? null,
+          parentBatchIds: dto.parentBatchIds ?? [],
+          manufacturingSiteId: dto.manufacturingSiteId ?? null,
         },
       })
       await this.auditService.log(tx, {
@@ -256,6 +278,12 @@ export class MasterDataService {
             ? { manufacturedOn: new Date(dto.manufacturedOn) }
             : {}),
           ...(dto.expiresOn !== undefined ? { expiresOn: new Date(dto.expiresOn) } : {}),
+          ...(dto.batchSize !== undefined ? { batchSize: dto.batchSize } : {}),
+          ...(dto.unit !== undefined ? { unit: dto.unit } : {}),
+          ...(dto.parentBatchIds !== undefined ? { parentBatchIds: dto.parentBatchIds } : {}),
+          ...(dto.manufacturingSiteId !== undefined
+            ? { manufacturingSiteId: dto.manufacturingSiteId }
+            : {}),
         },
       })
       await this.auditService.log(tx, {
@@ -345,6 +373,26 @@ export class MasterDataService {
         tx.productRegistration.count({ where }),
       ])
       return paginate(rows, total, query)
+    })
+  }
+
+  /** testing-correction-explanation.md §3.7 — the Retention modal needs this registration's own `authorityId`/`productClass` to resolve the guidance document checklist; nothing else in the frontend had a single-registration fetch before this. */
+  async getRegistration(
+    actor: AuthenticatedUser,
+    id: string,
+  ): Promise<ProductRegistration & { product: { brandName: string }; authority: { name: string; code: string } }> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const registration = await tx.productRegistration.findUnique({
+        where: { id },
+        include: {
+          product: { select: { brandName: true } },
+          authority: { select: { name: true, code: true } },
+        },
+      })
+      if (!registration)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Product registration not found' })
+      return registration
     })
   }
 
@@ -460,9 +508,21 @@ export class MasterDataService {
     })
   }
 
-  async deactivateRegistration(
+  /**
+   * testing-correction-explanation.md §3.6 — Withdrawal. Replaces the
+   * previous bare, un-gated status flip with a real, audited, evidenced
+   * action: a required reason, an optional supporting document, and a
+   * real electronic signature (decision #1 — the same tier as Stage 6's
+   * registration approval, since withdrawal is just as permanent and
+   * self-certifying). Blocked outright on an already-expired registration
+   * (§3.5) — an expired registration's own record stays exactly as it
+   * is; escalate to a fresh re-registration instead, never a withdrawal
+   * of something already lapsed.
+   */
+  async withdrawRegistration(
     actor: AuthenticatedUser,
     id: string,
+    dto: WithdrawRegistrationDto,
     meta: RequestMeta,
   ): Promise<ProductRegistration> {
     const companyId = requireCompany(actor)
@@ -473,10 +533,43 @@ export class MasterDataService {
           code: 'NOT_FOUND',
           message: 'Product registration not found',
         })
+      if (existing.status === 'withdrawn') {
+        throw new ConflictException({
+          code: 'ALREADY_WITHDRAWN',
+          message: 'This registration has already been withdrawn.',
+        })
+      }
+      if (existing.expiresOn < new Date()) {
+        throw new ConflictException({
+          code: 'REGISTRATION_EXPIRED',
+          message:
+            'This registration has already expired — withdrawal no longer applies. Its record stays exactly as it is.',
+        })
+      }
+
+      await this.signatureService.sign(
+        tx,
+        actor,
+        {
+          recordType: 'product_registration',
+          recordId: id,
+          intentStatement: dto.intentStatement,
+          signatureToken: dto.signatureToken,
+          roleAtSigning: actor.roleKeys[0] ?? 'unknown',
+          canonicalPayload: { registrationId: id, action: 'withdraw', reason: dto.reason },
+        },
+        meta,
+      )
 
       const updated = await tx.productRegistration.update({
         where: { id },
-        data: { status: 'withdrawn' },
+        data: {
+          status: 'withdrawn',
+          withdrawnAt: new Date(),
+          withdrawnReason: dto.reason,
+          withdrawnBy: actor.sub,
+          withdrawalDocumentId: dto.documentId,
+        },
       })
       await this.auditService.log(tx, {
         actorUserId: actor.sub,
@@ -485,7 +578,7 @@ export class MasterDataService {
         recordType: 'product_registration',
         recordId: id,
         oldValue: { status: existing.status },
-        newValue: { status: 'withdrawn' },
+        newValue: { status: 'withdrawn', reason: dto.reason, documentId: dto.documentId ?? null },
         ip: meta.ip,
       })
       return updated
