@@ -215,6 +215,28 @@ export class UsersService {
     return user
   }
 
+  /**
+   * A user's own UI display-language preference — self-service, no
+   * permission gate (every authenticated user, tenant or platform, may
+   * set this on their own account). Not RLS-scoped to a company lookup
+   * since a platform-staff actor (companyId: null) must also be able to
+   * call this — the row is addressed by the actor's own id, which the
+   * JWT already attests to, so there is no cross-tenant read risk here.
+   */
+  async setPreferredLocale(
+    actorId: string,
+    preferredLocale: string,
+  ): Promise<{ preferredLocale: string }> {
+    const user = await this.rls.runWithSystemAccess((tx) =>
+      tx.user.update({
+        where: { id: actorId },
+        data: { preferredLocale },
+        select: { preferredLocale: true },
+      }),
+    )
+    return user
+  }
+
   /** A company that loses every System Administrator can never invite or manage users again — the one hard safety rail on an otherwise-permissive role/deactivate API. */
   private async assertNotLastAdmin(
     tx: Prisma.TransactionClient,

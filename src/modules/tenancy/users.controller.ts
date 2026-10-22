@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { ListUsersQueryDto } from './dto/list-users-query.dto'
+import { UpdatePreferredLocaleDto } from './dto/update-preferred-locale.dto'
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto'
 import { UsersService } from './users.service'
 
@@ -18,6 +19,15 @@ export class UsersController {
   @Get()
   list(@CurrentUser() actor: AuthenticatedUser, @Query() query: ListUsersQueryDto) {
     return this.usersService.list(actor, query)
+  }
+
+  /** Self-service only — no permission gate, matches change-password's own "acting on your own account" precedent. */
+  @Patch('me/locale')
+  updatePreferredLocale(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() dto: UpdatePreferredLocaleDto,
+  ) {
+    return this.usersService.setPreferredLocale(actor.sub, dto.preferredLocale)
   }
 
   @RequirePermissions('users.manage_roles')

@@ -17,6 +17,7 @@ function buildUser(overrides: Partial<User> = {}): User {
     mustChangePassword: false,
     tokenVersion: 0,
     version: 1,
+    preferredLocale: 'en',
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

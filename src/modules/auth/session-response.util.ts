@@ -17,6 +17,7 @@ export function safeUser(
     roleKeys: string[]
     platformRole: string | null
     mustChangePassword: boolean
+    preferredLocale?: string
   },
   companyName?: string | null,
   permissions?: string[],
@@ -30,6 +31,8 @@ export function safeUser(
     roleKeys: user.roleKeys,
     platformRole: user.platformRole,
     mustChangePassword: user.mustChangePassword,
+    /** UI display language only — see todo-i18n.md. Defaults 'en' for every new user, changed only via PATCH /users/me/locale. */
+    preferredLocale: user.preferredLocale ?? 'en',
     /** Resolved once here at login/refresh time — the FE's usePermissions() hook reads this directly rather than re-deriving it, the server is still the enforcer either way. */
     permissions,
   }

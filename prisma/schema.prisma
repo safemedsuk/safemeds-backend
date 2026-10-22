@@ -528,6 +528,16 @@ model User {
   tokenVersion       Int     @default(0) @map("token_version")
   version            Int     @default(1)
 
+  /**
+   * UI display language, chosen by the user themselves (Settings ->
+   * Language). Never auto-derived from company/country — every new user
+   * defaults to 'en' regardless of their company's home market. This is
+   * display-language only and has no bearing on the language of any
+   * generated document (PDF/Excel), which stays English regardless — see
+   * todo-i18n.md.
+   */
+  preferredLocale String @default("en") @map("preferred_locale")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
