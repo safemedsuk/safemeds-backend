@@ -1,10 +1,16 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { EquipmentQualificationEvent, MaintenanceRecord } from '@prisma/client'
 
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import { DirectUploadFile, DocumentsService } from '../documents/documents.service'
 import { TasksService } from '../tasks/tasks.service'
 import {
   CreateMaintenanceRecordDto,
@@ -54,7 +60,50 @@ export class EquipmentQualificationService {
     private readonly rls: RlsService,
     private readonly auditService: AuditService,
     private readonly tasksService: TasksService,
+    private readonly documentsService: DocumentsService,
   ) {}
+
+  /**
+   * Pass B (item C3) — uploads a validation report against an equipment
+   * item. The DQ/IQ/OQ/PQ event that cites it is recorded afterwards, so
+   * the report always exists before the step it evidences.
+   */
+  async attachValidationReport(
+    actor: AuthenticatedUser,
+    equipmentId: string,
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ) {
+    const companyId = requireCompany(actor)
+    const equipment = await this.rls.runAsCompany(companyId, (tx) =>
+      tx.equipment.findFirst({
+        where: { id: equipmentId, companyId },
+        select: { id: true, name: true },
+      }),
+    )
+    if (!equipment)
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Equipment not found' })
+    const uploaded = await this.documentsService.uploadDirect(
+      actor,
+      EQUIPMENT_RECORD_TYPE,
+      equipmentId,
+      file,
+      { title: `Validation report — ${equipment.name} — ${new Date().toISOString().slice(0, 10)}` },
+      meta,
+    )
+    await this.rls.runAsCompany(companyId, (tx) =>
+      this.auditService.log(tx, {
+        actorUserId: actor.sub,
+        companyId,
+        action: 'equipment_validation_report_attached',
+        recordType: EQUIPMENT_RECORD_TYPE,
+        recordId: equipmentId,
+        newValue: { documentId: uploaded.document.id, filename: file.originalname },
+        ip: meta.ip,
+      }),
+    )
+    return { documentId: uploaded.document.id, title: uploaded.document.title }
+  }
 
   async recordEvent(
     actor: AuthenticatedUser,
@@ -69,6 +118,31 @@ export class EquipmentQualificationService {
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Equipment not found' })
 
       const result = dto.result ?? 'pass'
+      // Pass B (item C3): a passing step must cite a validation report that was
+      // uploaded against this equipment before the step is recorded.
+      if (result === 'pass') {
+        if (!dto.reportDocumentId) {
+          throw new BadRequestException({
+            code: 'VALIDATION_REPORT_REQUIRED',
+            message: 'Attach the validation report for this step before recording it as passed.',
+          })
+        }
+        const report = await tx.document.findFirst({
+          where: {
+            id: dto.reportDocumentId,
+            companyId,
+            recordType: EQUIPMENT_RECORD_TYPE,
+            recordId: equipmentId,
+          },
+        })
+        if (!report) {
+          throw new BadRequestException({
+            code: 'VALIDATION_REPORT_NOT_FOUND',
+            message:
+              'That validation report is not attached to this equipment. Upload it for this equipment first.',
+          })
+        }
+      }
       const created = await tx.equipmentQualificationEvent.create({
         data: {
           id: newId(),
@@ -200,13 +274,21 @@ export class EquipmentQualificationService {
           isActive: true,
           OR: [{ calibrationDueAt: { lt: now } }, { maintenanceDueAt: { lt: now } }],
         },
-        select: { id: true, companyId: true, name: true, calibrationDueAt: true, maintenanceDueAt: true },
+        select: {
+          id: true,
+          companyId: true,
+          name: true,
+          calibrationDueAt: true,
+          maintenanceDueAt: true,
+        },
       }),
     )
 
     for (const eq of overdue) {
       const reason =
-        eq.calibrationDueAt && eq.calibrationDueAt < now ? 'calibration overdue' : 'maintenance overdue'
+        eq.calibrationDueAt && eq.calibrationDueAt < now
+          ? 'calibration overdue'
+          : 'maintenance overdue'
       await this.tasksService.escalateForRecord(
         eq.companyId,
         EQUIPMENT_RECORD_TYPE,

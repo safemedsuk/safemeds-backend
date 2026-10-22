@@ -76,6 +76,15 @@ export class MonitorSupplierDto {
   @MinLength(1)
   @MaxLength(300)
   flag!: string
+
+  /** Pass B (item D2) — the uploaded review checklist (from `POST .../review-checklist`). Required for every review. */
+  @IsUUID()
+  checklistDocumentId!: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  notes?: string
 }
 
 export class CoaResultEntryDto {

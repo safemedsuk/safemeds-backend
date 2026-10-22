@@ -30,7 +30,8 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
     if (expected === undefined) return true
     if (expected !== null && typeof expected === 'object' && !(expected instanceof Date)) {
       const ops = expected as Record<string, unknown>
-      if ('startsWith' in ops) return typeof actual === 'string' && actual.startsWith(ops.startsWith as string)
+      if ('startsWith' in ops)
+        return typeof actual === 'string' && actual.startsWith(ops.startsWith as string)
       if ('not' in ops) return actual !== ops.not
     }
     return actual === expected
@@ -90,6 +91,7 @@ function buildHarness() {
     company: createTable(),
     product: createTable(),
     reportType: createTable(),
+    document: createTable(),
   }
   tables.company.rows.set('company-1', { id: 'company-1', homeCountryId: 'country-ke' })
   tables.product.rows.set('product-1', { id: 'product-1', brandName: 'Amoxil' })
@@ -110,19 +112,29 @@ function buildHarness() {
   }
   const auditLog = jest.fn().mockResolvedValue(undefined)
   const auditService = { log: auditLog } as never
-  const instantiate = jest.fn().mockImplementation((_actor: unknown, recordType: string, recordId: string) => {
-    tables.workflowInstance.rows.set(recordId, { id: recordId, recordType, recordId })
-    return Promise.resolve(undefined)
-  })
+  const instantiate = jest
+    .fn()
+    .mockImplementation((_actor: unknown, recordType: string, recordId: string) => {
+      tables.workflowInstance.rows.set(recordId, { id: recordId, recordType, recordId })
+      return Promise.resolve(undefined)
+    })
   const transition = jest.fn().mockResolvedValue(undefined)
   const workflowService = { instantiate, transition } as never
   const encrypt = jest.fn((s: string) => `enc(${s})`)
   const decrypt = jest.fn((s: string) => s.replace(/^enc\(/, '').replace(/\)$/, ''))
   const textEncryption = { encrypt, decrypt } as never
-  const createFrom = jest.fn().mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
-    Promise.resolve({ id: 'capa-1', companyId, sourceRecordType, sourceRecordId, title: input.title }),
-  )
-  const capaService = { createFrom } as never
+  const createFrom = jest
+    .fn()
+    .mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
+      Promise.resolve({
+        id: 'capa-1',
+        companyId,
+        sourceRecordType,
+        sourceRecordId,
+        title: input.title,
+      }),
+    )
+  const capaService = { createFrom, createAllocatedFrom: createFrom } as never
   const createFromSystemChannel = jest
     .fn()
     .mockResolvedValue({ id: 'case-1', referenceNumber: 'KEN-2026-KEN-00001' })
@@ -135,6 +147,7 @@ function buildHarness() {
     textEncryption,
     capaService,
     pvCaseService,
+    { uploadDirect: jest.fn() } as never,
   )
   return { service, tables, auditLog, instantiate, transition, createFrom, createFromSystemChannel }
 }
@@ -205,18 +218,31 @@ describe('ComplaintService', () => {
       )
       expect(updated.classification).toBe('quality_complaint')
       expect(updated.severity).toBe('minor')
-      expect(transition).toHaveBeenCalledWith(actor, created.id, 'classifying', { note: undefined }, {})
+      expect(transition).toHaveBeenCalledWith(
+        actor,
+        created.id,
+        'classifying',
+        { note: undefined },
+        {},
+      )
       expect(createFromSystemChannel).not.toHaveBeenCalled()
     })
 
     it('routes a possible_ae complaint to a real PV case via createFromSystemChannel()', async () => {
       const { service, createFromSystemChannel } = buildHarness()
       const created = await service.create(actor, baseCreateInput, {})
-      const updated = await service.classify(actor, created.id, { classification: 'possible_ae' }, {})
+      const updated = await service.classify(
+        actor,
+        created.id,
+        { classification: 'possible_ae' },
+        {},
+      )
       expect(createFromSystemChannel).toHaveBeenCalledWith(
         'company-1',
         expect.objectContaining({
-          suspectProducts: [expect.objectContaining({ medicinalProduct: 'Amoxil', productId: 'product-1' })],
+          suspectProducts: [
+            expect.objectContaining({ medicinalProduct: 'Amoxil', productId: 'product-1' }),
+          ],
           adverseEvents: [expect.objectContaining({ narrative: baseCreateInput.description })],
         }),
         'quality_complaint_routed',
@@ -237,12 +263,34 @@ describe('ComplaintService', () => {
 
   describe('resolve()', () => {
     it('encrypts the resolution note and stamps resolvedAt', async () => {
-      const { service, transition } = buildHarness()
+      const { service, transition, tables } = buildHarness()
       const created = await service.create(actor, baseCreateInput, {})
-      const updated = await service.resolve(manager, created.id, { resolutionNote: 'Batch reconciled' }, {})
+      tables.document.rows.set('doc-1', {
+        id: 'doc-1',
+        companyId: 'company-1',
+        recordType: 'quality_complaint_substantiation',
+        recordId: created.id,
+      })
+      const updated = await service.resolve(
+        manager,
+        created.id,
+        { resolutionNote: 'Batch reconciled' },
+        {},
+      )
       expect(updated.resolutionNote).toBe('Batch reconciled')
       expect(updated.resolvedAt).toBeInstanceOf(Date)
       expect(transition).toHaveBeenCalledWith(manager, created.id, 'resolved', {}, {})
+    })
+  })
+
+  describe('resolve() — substantiation gate (Pass A2 item 4d)', () => {
+    it('refuses to resolve a complaint with no substantiating document attached', async () => {
+      const { service, transition } = buildHarness()
+      const created = await service.create(actor, baseCreateInput, {})
+      await expect(
+        service.resolve(manager, created.id, { resolutionNote: 'Batch reconciled' }, {}),
+      ).rejects.toMatchObject({ response: { code: 'SUBSTANTIATION_REQUIRED' } })
+      expect(transition).not.toHaveBeenCalled()
     })
   })
 
@@ -250,7 +298,12 @@ describe('ComplaintService', () => {
     it('returns nulls with zero resolved complaints', async () => {
       const { service } = buildHarness()
       const kpi = await service.resolutionTimeKpi(actor)
-      expect(kpi).toEqual({ averageDays: null, withinTargetPercent: null, targetDays: 30, resolvedCount: 0 })
+      expect(kpi).toEqual({
+        averageDays: null,
+        withinTargetPercent: null,
+        targetDays: 30,
+        resolvedCount: 0,
+      })
     })
 
     it('computes a real average resolution time', async () => {
@@ -275,7 +328,13 @@ describe('ComplaintService', () => {
       const capa = await service.openCapaForComplaint(
         actor,
         created.id,
-        { title: 'Fix packaging', correctiveAction: 'Inspect seal line' },
+        {
+          rootCause: 'Seal line pressure drift',
+          rootCauseCategory: 'human_error_training',
+          correctiveAction: 'Inspect seal line',
+          ownerUserId: 'owner-user',
+          correctiveActionDueDate: '2026-12-01',
+        },
         {},
       )
       expect(capa.sourceRecordType).toBe('complaint')
@@ -285,7 +344,7 @@ describe('ComplaintService', () => {
         'company-1',
         'complaint',
         created.id,
-        expect.objectContaining({ title: 'Fix packaging' }),
+        expect.objectContaining({ rootCauseCategory: 'human_error_training' }),
         {},
       )
     })

@@ -12,6 +12,7 @@ import { paginate, PaginatedResult } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
 import { WorkflowService } from '../workflow/workflow.service'
+import { DocumentNumberingService } from './document-numbering.service'
 import { CreateSopDto } from './dto/create-sop.dto'
 import { ListSopsQueryDto } from './dto/list-sops-query.dto'
 import { UpdateSopDto } from './dto/update-sop.dto'
@@ -59,6 +60,7 @@ export class SopService {
     private readonly rls: RlsService,
     private readonly auditService: AuditService,
     private readonly workflowService: WorkflowService,
+    private readonly documentNumbering: DocumentNumberingService,
   ) {}
 
   async list(actor: AuthenticatedUser, query: ListSopsQueryDto): Promise<PaginatedResult<Sop>> {
@@ -91,7 +93,25 @@ export class SopService {
     })
   }
 
-  async get(actor: AuthenticatedUser, id: string): Promise<Sop & { workflowInstanceId: string | null }> {
+  /** Active tenant users, id + display fields only (no roles, no email list dump). */
+  async listAssignableReaders(
+    actor: AuthenticatedUser,
+  ): Promise<Array<{ id: string; fullName: string; email: string }>> {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, (tx) =>
+      tx.user.findMany({
+        where: { companyId, status: 'active' },
+        select: { id: true, fullName: true, email: true },
+        orderBy: { fullName: 'asc' },
+        take: 500,
+      }),
+    )
+  }
+
+  async get(
+    actor: AuthenticatedUser,
+    id: string,
+  ): Promise<Sop & { workflowInstanceId: string | null }> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const found = await tx.sop.findFirst({ where: { id, companyId } })
@@ -107,21 +127,29 @@ export class SopService {
   async create(actor: AuthenticatedUser, dto: CreateSopDto, meta: RequestMeta): Promise<Sop> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
-      const duplicate = await tx.sop.findFirst({
-        where: { companyId, documentNumber: dto.documentNumber, currentVersion: 1 },
+      const company = await tx.company.findUnique({
+        where: { id: companyId },
+        select: { name: true },
       })
-      if (duplicate) {
-        throw new ConflictException({
-          code: 'DOCUMENT_NUMBER_TAKEN',
-          message: `Document number "${dto.documentNumber}" is already in use`,
-        })
-      }
+      const isTaken = async (candidate: string) =>
+        (await tx.sop.count({
+          where: { companyId, documentNumber: { equals: candidate, mode: 'insensitive' } },
+        })) > 0
+      const documentNumber =
+        dto.documentNumber !== undefined && dto.documentNumber.trim() !== ''
+          ? await this.documentNumbering.reserveManual(tx, companyId, dto.documentNumber, isTaken)
+          : await this.documentNumbering.allocate(tx, {
+              companyId,
+              companyName: company?.name ?? '',
+              documentType: dto.documentType,
+              isTaken,
+            })
 
       const created = await tx.sop.create({
         data: {
           id: newId(),
           companyId,
-          documentNumber: dto.documentNumber,
+          documentNumber,
           title: dto.title,
           documentType: dto.documentType,
           productId: dto.productId ?? null,
@@ -140,7 +168,13 @@ export class SopService {
         action: 'sop_created',
         recordType: 'sop',
         recordId: created.id,
-        newValue: { documentNumber: created.documentNumber, title: created.title },
+        newValue: {
+          documentNumber: created.documentNumber,
+          numberSource:
+            dto.documentNumber && dto.documentNumber.trim() !== '' ? 'manual' : 'system',
+          title: created.title,
+          documentType: created.documentType,
+        },
         ip: meta.ip,
       })
 

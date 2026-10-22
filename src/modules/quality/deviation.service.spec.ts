@@ -89,18 +89,24 @@ function buildHarness() {
   const encrypt = jest.fn((s: string) => `enc(${s})`)
   const decrypt = jest.fn((s: string) => s.replace(/^enc\(/, '').replace(/\)$/, ''))
   const textEncryption = { encrypt, decrypt } as never
-  const createFrom = jest.fn().mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
-    Promise.resolve({
-      id: 'capa-1',
-      companyId,
-      sourceRecordType,
-      sourceRecordId,
-      title: input.title,
-      correctiveAction: input.correctiveAction,
-      status: 'open',
-    }),
-  )
-  const capaService = { createFrom } as never
+  const createFrom = jest
+    .fn()
+    .mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
+      Promise.resolve({
+        id: 'capa-1',
+        companyId,
+        sourceRecordType,
+        sourceRecordId,
+        title: input.title,
+        correctiveAction: input.correctiveAction,
+        status: 'open',
+      }),
+    )
+  const capaService = {
+    createFrom,
+    createAllocatedFrom: createFrom,
+    listForSource: jest.fn().mockResolvedValue([]),
+  } as never
 
   const service = new DeviationService(
     rls as never,
@@ -108,6 +114,7 @@ function buildHarness() {
     workflowService,
     textEncryption,
     capaService,
+    { uploadDirect: jest.fn() } as never,
   )
   return { service, tables, auditLog, instantiate, createFrom }
 }
@@ -129,7 +136,11 @@ describe('DeviationService', () => {
       const { service } = buildHarness()
       const created = await service.create(
         actor,
-        { title: 'Temperature excursion', sourceType: 'monitoring_alert', detectedAt: '2026-09-01' },
+        {
+          title: 'Temperature excursion',
+          sourceType: 'monitoring_alert',
+          detectedAt: '2026-09-01',
+        },
         {},
       )
       expect(created.status).toBe('detected')
@@ -231,7 +242,13 @@ describe('DeviationService', () => {
         service.openCapaForDeviation(
           actor,
           deviation.id,
-          { title: 'Fix it', correctiveAction: 'Retrain staff' },
+          {
+            rootCause: 'Operator skipped the verification step',
+            rootCauseCategory: 'human_error_training',
+            correctiveAction: 'Retrain staff',
+            ownerUserId: 'owner-user',
+            correctiveActionDueDate: '2026-12-01',
+          },
           {},
         ),
       ).rejects.toThrow(ConflictException)
@@ -252,7 +269,13 @@ describe('DeviationService', () => {
       const capa = await service.openCapaForDeviation(
         actor,
         deviation.id,
-        { title: 'Fix it', correctiveAction: 'Retrain staff', rootCauseCategory: 'operator_error' },
+        {
+          rootCause: 'Operator skipped the verification step',
+          rootCauseCategory: 'human_error_training',
+          correctiveAction: 'Retrain staff',
+          ownerUserId: 'owner-user',
+          correctiveActionDueDate: '2026-12-01',
+        },
         {},
       )
       expect(capa.sourceRecordType).toBe('deviation')
@@ -263,7 +286,10 @@ describe('DeviationService', () => {
         'company-1',
         'deviation',
         deviation.id,
-        expect.objectContaining({ title: 'Fix it', rootCauseCategory: 'operator_error' }),
+        expect.objectContaining({
+          rootCauseCategory: 'human_error_training',
+          ownerUserId: 'owner-user',
+        }),
         {},
       )
     })

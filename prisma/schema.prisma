@@ -374,6 +374,8 @@ model Company {
   qualitySuppliers                Supplier[]
   qualityEquipment                Equipment[]
   qualitySops                     Sop[]
+  documentNumberSequences         DocumentNumberSequence[]
+  documentNumberingSchemes        DocumentNumberingScheme[]
   qualitySpecifications           Specification[]
   qualityDocumentAcks             DocumentAcknowledgment[]
   qualityRetentionPolicies        RetentionPolicy[]
@@ -392,6 +394,13 @@ model Company {
   // QualCloud (Phase 13) Stage 8 — Metrics, Trending & Management Review.
   qualityTrendFlags               QualityTrendFlag[]
   managementReviews               ManagementReview[]
+  // Pass B — waste disposal cases, supplier performance reviews, management review attendees.
+  wasteDisposalCases              WasteDisposalCase[]
+  wasteDisposalCaseAttendees      WasteDisposalCaseAttendee[]
+  wasteDisposalCasePhotos         WasteDisposalCasePhoto[]
+  wasteDisposalCaseItems          WasteDisposalCaseItem[]
+  supplierPerformanceReviews      SupplierPerformanceReview[]
+  managementReviewAttendees       ManagementReviewAttendee[]
   // QualCloud (Phase 13) Stage 9 — Audit & Inspection Management.
   internalAuditChecklistResponses InternalAuditChecklistResponse[]
   regulatoryInspectionResponses   RegulatoryInspectionResponse[]
@@ -592,6 +601,11 @@ model User {
   // QualCloud (Phase 13) Stage 8 — Metrics, Trending & Management Review.
   qualityTrendFlagsAcknowledged          QualityTrendFlag[]                   @relation("quality_trend_flag_acknowledged_by")
   managementReviewsCreated               ManagementReview[]                   @relation("management_review_created_by")
+  wasteDisposalCasesCreated              WasteDisposalCase[]                  @relation("wdc_created_by")
+  wasteDisposalCasesClosed               WasteDisposalCase[]                  @relation("wdc_closed_by")
+  wasteDisposalCasesPpbVerified          WasteDisposalCase[]                  @relation("wdc_ppb_verified_by")
+  supplierPerformanceReviewsRecorded     SupplierPerformanceReview[]          @relation("supplier_performance_review_by")
+  managementReviewAttendeesCreated       ManagementReviewAttendee[]           @relation("management_review_attendee_created_by")
   // QualCloud (Phase 13) Stage 9 — Audit & Inspection Management.
   checklistResponsesReviewed             InternalAuditChecklistResponse[]     @relation("checklist_response_reviewed_by")
   regulatoryInspectionResponsesSubmitted RegulatoryInspectionResponse[]       @relation("regulatory_inspection_response_submitted_by")
@@ -667,37 +681,38 @@ model User {
   relianceApplicationsCreated            RelianceApplication[]
 
   // QualCloud (Phase 13) Stage 0 — Foundation Layer.
-  qualitySopsCreated                  Sop[]                    @relation("sop_created_by")
-  qualitySpecificationsCreated        Specification[]          @relation("specification_created_by")
-  qualityDocumentAcksAssigned         DocumentAcknowledgment[] @relation("document_acknowledgment_user")
-  qualityRiskAssessmentsCreated       RiskAssessment[]         @relation("risk_assessment_created_by")
+  qualitySopsCreated                     Sop[]                           @relation("sop_created_by")
+  qualitySpecificationsCreated           Specification[]                 @relation("specification_created_by")
+  qualityDocumentAcksAssigned            DocumentAcknowledgment[]        @relation("document_acknowledgment_user")
+  qualityRiskAssessmentsCreated          RiskAssessment[]                @relation("risk_assessment_created_by")
   // QualCloud (Phase 13) Stage 2 — Deviation & Non-Conformance Management.
-  qualityDeviationsRaised             Deviation[]              @relation("deviation_raised_by")
-  qualityDeviationsCreated            Deviation[]              @relation("deviation_created_by")
-  qualityInvestigationsAsInvestigator Investigation[]          @relation("investigation_investigator")
-  qualityInvestigationsAsReviewer     Investigation[]          @relation("investigation_reviewer")
+  qualityDeviationsRaised                Deviation[]                     @relation("deviation_raised_by")
+  qualityDeviationsCreated               Deviation[]                     @relation("deviation_created_by")
+  qualityInvestigationsAsInvestigator    Investigation[]                 @relation("investigation_investigator")
+  qualityInvestigationsAsReviewer        Investigation[]                 @relation("investigation_reviewer")
   // QualCloud (Phase 13) Stage 3 — CAPA (unified, cross-module).
-  capasApproved                       Capa[]                   @relation("capa_approved_by")
-  capasRegulatoryApproved             Capa[]                   @relation("capa_regulatory_approved_by")
+  capasApproved                          Capa[]                          @relation("capa_approved_by")
+  capasRegulatoryApproved                Capa[]                          @relation("capa_regulatory_approved_by")
+  capasAssignedRegulatoryApprover        Capa[]                          @relation("capa_regulatory_approver")
   // QualCloud (Phase 13) Stage 4 — Change Control.
-  changeControlsCreated               ChangeControl[]          @relation("change_control_created_by")
+  changeControlsCreated                  ChangeControl[]                 @relation("change_control_created_by")
   // QualCloud (Phase 13) Stage 5 — Complaint Handling.
-  complaintsCreated                   Complaint[]              @relation("complaint_created_by")
+  complaintsCreated                      Complaint[]                     @relation("complaint_created_by")
   // QualCloud (Phase 13) Stage 6 — OOS/OOT Investigation.
-  oosRecordsCreated                   Oos[]                    @relation("oos_created_by")
+  oosRecordsCreated                      Oos[]                           @relation("oos_created_by")
   // QualCloud (Phase 13) Stage 7 — Batch Record Review.
-  batchRecordReviewsPerformed         BatchRecordReview[]      @relation("batch_record_review_reviewer")
+  batchRecordReviewsPerformed            BatchRecordReview[]             @relation("batch_record_review_reviewer")
   // QualCloud (Phase 13) Stage 15 — Pharmaceutical Waste Management.
-  wasteDisposalRecordsWitnessed       WasteDisposalRecord[]    @relation("waste_disposal_witnessed_by")
-  wasteDisposalRecordsCreated         WasteDisposalRecord[]    @relation("waste_disposal_created_by")
+  wasteDisposalRecordsWitnessed          WasteDisposalRecord[]           @relation("waste_disposal_witnessed_by")
+  wasteDisposalRecordsCreated            WasteDisposalRecord[]           @relation("waste_disposal_created_by")
   // QualCloud (Phase 13) Stage 16 — Falsified & Substandard Product Handling.
-  falsifiedProductReportsReported     FalsifiedProductReport[] @relation("falsified_product_report_reported_by")
+  falsifiedProductReportsReported        FalsifiedProductReport[]        @relation("falsified_product_report_reported_by")
   // QualCloud (Phase 13) Stage 17 — Batch Release (Qualified Person).
-  batchReleaseDecisionsReleased       BatchReleaseDecision[]   @relation("batch_release_decision_released_by")
+  batchReleaseDecisionsReleased          BatchReleaseDecision[]          @relation("batch_release_decision_released_by")
   // QualCloud (Phase 13) Stage 18 — Validation / CSV.
-  validationProtocolsCreated          ValidationProtocol[]     @relation("validation_protocol_created_by")
-  validationReportsExecuted           ValidationReport[]       @relation("validation_report_executed_by")
-  validationReportsCreated            ValidationReport[]       @relation("validation_report_created_by")
+  validationProtocolsCreated             ValidationProtocol[]            @relation("validation_protocol_created_by")
+  validationReportsExecuted              ValidationReport[]              @relation("validation_report_executed_by")
+  validationReportsCreated               ValidationReport[]              @relation("validation_report_created_by")
   // QualCloud (Phase 13) Stage 19 — Environmental Monitoring & Stability.
   environmentalMonitoringResultsRecorded EnvironmentalMonitoringResult[] @relation("environmental_monitoring_recorded_by")
   stabilityStudiesCreated                StabilityStudy[]                @relation("stability_study_created_by")
@@ -1252,8 +1267,8 @@ model Facility {
   createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  userLocationScopes UserLocationScope[]
-  qualityEquipment   Equipment[]
+  userLocationScopes             UserLocationScope[]
+  qualityEquipment               Equipment[]
   environmentalMonitoringResults EnvironmentalMonitoringResult[]
 
   @@index([companyId])
@@ -1561,6 +1576,8 @@ model Product {
   falsifiedProductReports        FalsifiedProductReport[]
   validationProtocols            ValidationProtocol[]
   stabilityStudies               StabilityStudy[]
+  wasteDisposalCases             WasteDisposalCase[]
+  wasteDisposalCaseItems         WasteDisposalCaseItem[]
 
   @@index([companyId])
   @@map("product")
@@ -1724,6 +1741,8 @@ model Batch {
   falsifiedProductReports   FalsifiedProductReport[]
   batchReleaseDecisions     BatchReleaseDecision[]
   stabilityStudies          StabilityStudy[]
+  wasteDisposalCases        WasteDisposalCase[]
+  wasteDisposalCaseItems    WasteDisposalCaseItem[]
 
   @@index([companyId])
   @@index([productId])
@@ -1974,6 +1993,14 @@ model Document {
    */
   batchRecordReviewMbrFor                 BatchRecordReview[]                  @relation("batch_record_review_mbr")
   wasteDisposalCertificateFor             WasteDisposalRecord[]                @relation("waste_disposal_certificate")
+  wasteCaseInvoiceFor                     WasteDisposalCase[]                  @relation("wdc_invoice")
+  wasteCaseReceiptFor                     WasteDisposalCase[]                  @relation("wdc_receipt")
+  wasteCaseHandoverCertificateFor         WasteDisposalCase[]                  @relation("wdc_handover_certificate")
+  wasteCaseDestructionPdfFor              WasteDisposalCase[]                  @relation("wdc_destruction_pdf")
+  wasteCasePpbCertificateFor              WasteDisposalCase[]                  @relation("wdc_ppb_certificate")
+  wasteCasePhotoFor                       WasteDisposalCasePhoto[]             @relation("wdc_photo")
+  supplierGmpCertificateFor               Supplier[]                           @relation("supplier_gmp_certificate")
+  supplierPerformanceReviewChecklistFor   SupplierPerformanceReview[]          @relation("supplier_review_checklist")
   validationReportDocumentFor             ValidationReport[]                   @relation("validation_report_document")
 
   @@index([companyId, recordType, recordId])
@@ -2387,7 +2414,8 @@ model GeneratedReport {
 
   safetyLetterRecipients              SafetyLetterRecipient[]
   regPostMarketObligationFulfillments RegPostMarketObligationFulfillment[]
-  pqrFor                              Pqr[]
+  pqrFor                              Pqr[]                                @relation("pqr_pdf_report")
+  pqrExcelFor                         Pqr[]                                @relation("pqr_excel_report")
 
   @@index([companyId, moduleKey, reportTypeKey])
   @@index([companyId, status])
@@ -2410,17 +2438,17 @@ model GeneratedReport {
  * re-pulls it, it only adds the human judgment layer on top.
  */
 model Pqr {
-  id                   String           @id @db.Uuid
-  companyId            String           @map("company_id") @db.Uuid
-  company              Company          @relation(fields: [companyId], references: [id])
-  productId            String           @map("product_id") @db.Uuid
-  product              Product          @relation(fields: [productId], references: [id])
-  periodStart          DateTime         @map("period_start") @db.Date
-  periodEnd            DateTime         @map("period_end") @db.Date
+  id                     String           @id @db.Uuid
+  companyId              String           @map("company_id") @db.Uuid
+  company                Company          @relation(fields: [companyId], references: [id])
+  productId              String           @map("product_id") @db.Uuid
+  product                Product          @relation(fields: [productId], references: [id])
+  periodStart            DateTime         @map("period_start") @db.Date
+  periodEnd              DateTime         @map("period_end") @db.Date
   /**
    * `draft | reviewed`.
    */
-  status               String           @default("draft")
+  status                 String           @default("draft")
   /**
    * The frozen live pull at `assemble()` time — batches, deviations,
    * CAPAs, OOS, complaints, changes, a stability placeholder (honestly
@@ -2429,23 +2457,26 @@ model Pqr {
    * `QualityTrendFlag` rows. See `PqrService.assemble()`'s own doc
    * comment for the exact shape.
    */
-  assembledData        Json?            @map("assembled_data")
-  conclusionsNarrative String?          @map("conclusions_narrative")
-  trendsNarrative      String?          @map("trends_narrative")
+  assembledData          Json?            @map("assembled_data")
+  conclusionsNarrative   String?          @map("conclusions_narrative")
+  trendsNarrative        String?          @map("trends_narrative")
   /**
    * `[{ description, ownerUserId?, capaId? }]` — each optionally opening a real `Capa` via `createFrom('pqr_action', ...)`.
    */
-  recommendedActions   Json?            @map("recommended_actions")
-  reviewedBy           String?          @map("reviewed_by") @db.Uuid
-  reviewer             User?            @relation("pqr_reviewed_by", fields: [reviewedBy], references: [id])
-  reviewedAt           DateTime?        @map("reviewed_at") @db.Timestamptz(3)
-  nextReviewDueAt      DateTime?        @map("next_review_due_at") @db.Timestamptz(3)
-  generatedReportId    String?          @map("generated_report_id") @db.Uuid
-  generatedReport      GeneratedReport? @relation(fields: [generatedReportId], references: [id])
-  createdBy            String?          @map("created_by") @db.Uuid
-  creator              User?            @relation("pqr_created_by", fields: [createdBy], references: [id])
-  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  recommendedActions     Json?            @map("recommended_actions")
+  reviewedBy             String?          @map("reviewed_by") @db.Uuid
+  reviewer               User?            @relation("pqr_reviewed_by", fields: [reviewedBy], references: [id])
+  reviewedAt             DateTime?        @map("reviewed_at") @db.Timestamptz(3)
+  nextReviewDueAt        DateTime?        @map("next_review_due_at") @db.Timestamptz(3)
+  generatedReportId      String?          @map("generated_report_id") @db.Uuid
+  generatedReport        GeneratedReport? @relation("pqr_pdf_report", fields: [generatedReportId], references: [id])
+  /// Archived Excel workbook of the same APQR (Phase 2 Pass C). Set at review.
+  excelGeneratedReportId String?          @map("excel_generated_report_id") @db.Uuid
+  excelGeneratedReport   GeneratedReport? @relation("pqr_excel_report", fields: [excelGeneratedReportId], references: [id])
+  createdBy              String?          @map("created_by") @db.Uuid
+  creator                User?            @relation("pqr_created_by", fields: [createdBy], references: [id])
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([companyId, productId])
   @@index([companyId, status])
@@ -4490,20 +4521,24 @@ model QualityTrendFlag {
  * violated by a review whose own numbers could drift after the fact.
  */
 model ManagementReview {
-  id                          String    @id @db.Uuid
-  companyId                   String    @map("company_id") @db.Uuid
-  company                     Company   @relation(fields: [companyId], references: [id])
+  id                          String                     @id @db.Uuid
+  companyId                   String                     @map("company_id") @db.Uuid
+  company                     Company                    @relation(fields: [companyId], references: [id])
   period                      String
-  reviewDate                  DateTime  @map("review_date") @db.Date
+  reviewDate                  DateTime                   @map("review_date") @db.Date
   attendees                   String?
-  metricsSnapshot             Json      @map("metrics_snapshot")
-  recurringIssueFlagsSnapshot Json?     @map("recurring_issue_flags_snapshot")
-  actionsAgreed               Json?     @map("actions_agreed")
-  nextReviewDueAt             DateTime? @map("next_review_due_at") @db.Timestamptz(3)
-  createdBy                   String?   @map("created_by") @db.Uuid
-  creator                     User?     @relation("management_review_created_by", fields: [createdBy], references: [id])
-  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  metricsSnapshot             Json                       @map("metrics_snapshot")
+  recurringIssueFlagsSnapshot Json?                      @map("recurring_issue_flags_snapshot")
+  actionsAgreed               Json?                      @map("actions_agreed")
+  nextReviewDueAt             DateTime?                  @map("next_review_due_at") @db.Timestamptz(3)
+  createdBy                   String?                    @map("created_by") @db.Uuid
+  creator                     User?                      @relation("management_review_created_by", fields: [createdBy], references: [id])
+  /**
+   * Pass B — structured attendee rows. The legacy `attendees` string is kept (never dropped) for reviews created before this change.
+   */
+  attendeeRows                ManagementReviewAttendee[]
+  createdAt                   DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                   DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([companyId, reviewDate])
   @@map("management_review")
@@ -4614,7 +4649,34 @@ model Capa {
   rootCauseCategory          String?                  @map("root_cause_category")
   ownerUserId                String?                  @map("owner_user_id") @db.Uuid
   owner                      User?                    @relation("capa_owner", fields: [ownerUserId], references: [id])
+  /**
+   * Pass A2 — the CAPA's own root-cause description (free text), the
+   * required replacement for the old "Title" field on the Open CAPA
+   * modal. `title` (below, required by the schema since Stage 3) is
+   * now derived from this on every new CAPA, so no empty-title CAPA can
+   * exist. Nullable only for rows created before this column existed.
+   */
+  rootCause                  String?                  @map("root_cause")
+  /**
+   * Pass A2 — separate due dates for the corrective action and the
+   * preventive action (they may legitimately differ). Backfilled from
+   * the legacy `dueDate` below for every pre-existing row.
+   */
+  correctiveActionDueDate    DateTime?                @map("corrective_action_due_date") @db.Date
+  preventiveActionDueDate    DateTime?                @map("preventive_action_due_date") @db.Date
+  /**
+   * Legacy single due date — kept for backward compatibility and written
+   * with the same value as `correctiveActionDueDate` on every new write.
+   * New code reads the two specific dates above, never this one.
+   */
   dueDate                    DateTime?                @map("due_date") @db.Date
+  /**
+   * Pass A2 — the regulatory approver designated at CAPA creation (when
+   * `requiresRegulatoryApproval` is set). Distinct from `regulatoryApprovedBy`,
+   * which records the approval itself. Must hold `regulatory.manage_registrations`.
+   */
+  regulatoryApproverUserId   String?                  @map("regulatory_approver_user_id") @db.Uuid
+  regulatoryApproverAssigned User?                    @relation("capa_regulatory_approver", fields: [regulatoryApproverUserId], references: [id])
   status                     CapaStatus               @default(open)
   /**
    * QualCloud (Phase 13) Stage 3 — `implement()` marks the CAPA
@@ -6954,12 +7016,26 @@ model Supplier {
    */
   performanceFlags         String[]  @default([]) @map("performance_flags")
 
-  specifications Specification[]
-  deviations     Deviation[]
-  changeControls ChangeControl[]
-  internalAudits InternalAudit[]
-  questionnaires SupplierQuestionnaire[]
-  coaRecords     CertificateOfAnalysis[]
+  specifications             Specification[]
+  deviations                 Deviation[]
+  changeControls             ChangeControl[]
+  internalAudits             InternalAudit[]
+  questionnaires             SupplierQuestionnaire[]
+  coaRecords                 CertificateOfAnalysis[]
+  /**
+   * Pass B (QualCloud) — the supplier's GMP certificate, required before
+   * `approve()` can succeed (enforced in the service, not only the UI).
+   */
+  gmpCertificateDocumentId   String?                     @map("gmp_certificate_document_id") @db.Uuid
+  gmpCertificateDocument     Document?                   @relation("supplier_gmp_certificate", fields: [gmpCertificateDocumentId], references: [id])
+  /**
+   * Pass B — the `nextReviewDueAt` value a biennial-review reminder was
+   * already sent for. The daily scan only notifies once per due date, so
+   * a re-run never double-sends (same dedupe precedent as
+   * `Deviation.investigationReminderStage`).
+   */
+  reviewReminderSentForDueAt DateTime?                   @map("review_reminder_sent_for_due_at") @db.Timestamptz(3)
+  performanceReviews         SupplierPerformanceReview[]
 
   @@index([companyId])
   @@index([companyId, nextRequalificationDueAt])
@@ -7153,6 +7229,56 @@ model MaintenanceRecord {
  * own stage split — mirroring RegCloud Stage 0.3's "document custody
  * exists, the compilation wizard is a later stage" precedent).
  */
+/**
+ * Pass A — the per-company, per-document-type, per-year sequence counter
+ * behind `DocumentNumberingService`. A controlled document's number is
+ * generated server-side (`{COMPANY}-{TYPE}-{YYYY}-{0001}`), never typed
+ * in by a user. `lastValue` is incremented atomically via a single
+ * `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` so two concurrent
+ * creates can never be handed the same number. Pass B will replace the
+ * default scheme with the admin-configurable numbering engine; this table
+ * stays the counter store either way.
+ */
+model DocumentNumberSequence {
+  id           String   @id @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  company      Company  @relation(fields: [companyId], references: [id])
+  documentType String   @map("document_type")
+  year         Int
+  lastValue    Int      @default(0) @map("last_value")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, documentType, year])
+  @@map("document_number_sequence")
+}
+
+/// Phase 2 Pass C — per-company document-number scheme. One `company` row
+/// (company initials, default token order, separator) plus one row per
+/// document type (`scope` = the type key). Type-row nulls inherit the
+/// company default. Changing this is audited; it is not version-on-write.
+/// The counter stays in `DocumentNumberSequence` (per company + type + year),
+/// so a scheme change never resets or reuses an issued number.
+model DocumentNumberingScheme {
+  id         String   @id @db.Uuid
+  companyId  String   @map("company_id") @db.Uuid
+  company    Company  @relation(fields: [companyId], references: [id])
+  /// `company` or a document type key (`sop`, `policy`, ...).
+  scope      String
+  /// Initials. Company row: null = derive from the company name. Type row: null = derive from the type key.
+  initials   String?
+  /// Company row: required token order. Type row: null = inherit the company order.
+  tokenOrder Json?    @map("token_order")
+  /// Company row: required separator. Type row: null = inherit.
+  separator  String?
+  updatedBy  String?  @map("updated_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, scope])
+  @@map("document_numbering_scheme")
+}
+
 model Sop {
   id                       String    @id @db.Uuid
   companyId                String    @map("company_id") @db.Uuid
@@ -7405,14 +7531,14 @@ model RiskAssessment {
  * 'deviation'`).
  */
 model Deviation {
-  id                   String          @id @db.Uuid
-  companyId            String          @map("company_id") @db.Uuid
-  company              Company         @relation(fields: [companyId], references: [id])
+  id                         String          @id @db.Uuid
+  companyId                  String          @map("company_id") @db.Uuid
+  company                    Company         @relation(fields: [companyId], references: [id])
   /**
    * Real sequential display code, `DEV-2026-00001` — same generator precedent as `RegVariation.displayCode`.
    */
-  deviationNumber      String          @map("deviation_number")
-  title                String
+  deviationNumber            String          @map("deviation_number")
+  title                      String
   /**
    * Text-encrypted (`TextEncryptionService`, the same primitive
    * VigiCloud's own case-narrative fields use) — a deviation
@@ -7420,33 +7546,33 @@ model Deviation {
    * detail. Never returned as raw ciphertext — see `DeviationService
    * .decryptDeviation()`.
    */
-  descriptionEncrypted String?         @map("description_encrypted")
+  descriptionEncrypted       String?         @map("description_encrypted")
   /**
    * `self_reported | audit_finding | oos_triggered | complaint_triggered | monitoring_alert`.
    */
-  sourceType           String          @map("source_type")
-  productId            String?         @map("product_id") @db.Uuid
-  product              Product?        @relation(fields: [productId], references: [id])
-  batchId              String?         @map("batch_id") @db.Uuid
-  batch                Batch?          @relation(fields: [batchId], references: [id])
-  equipmentId          String?         @map("equipment_id") @db.Uuid
-  equipment            Equipment?      @relation(fields: [equipmentId], references: [id])
-  supplierId           String?         @map("supplier_id") @db.Uuid
-  supplier             Supplier?       @relation(fields: [supplierId], references: [id])
-  sopId                String?         @map("sop_id") @db.Uuid
-  sop                  Sop?            @relation(fields: [sopId], references: [id])
-  detectedAt           DateTime        @map("detected_at") @db.Timestamptz(3)
-  raisedBy             String?         @map("raised_by") @db.Uuid
-  raiser               User?           @relation("deviation_raised_by", fields: [raisedBy], references: [id])
+  sourceType                 String          @map("source_type")
+  productId                  String?         @map("product_id") @db.Uuid
+  product                    Product?        @relation(fields: [productId], references: [id])
+  batchId                    String?         @map("batch_id") @db.Uuid
+  batch                      Batch?          @relation(fields: [batchId], references: [id])
+  equipmentId                String?         @map("equipment_id") @db.Uuid
+  equipment                  Equipment?      @relation(fields: [equipmentId], references: [id])
+  supplierId                 String?         @map("supplier_id") @db.Uuid
+  supplier                   Supplier?       @relation(fields: [supplierId], references: [id])
+  sopId                      String?         @map("sop_id") @db.Uuid
+  sop                        Sop?            @relation(fields: [sopId], references: [id])
+  detectedAt                 DateTime        @map("detected_at") @db.Timestamptz(3)
+  raisedBy                   String?         @map("raised_by") @db.Uuid
+  raiser                     User?           @relation("deviation_raised_by", fields: [raisedBy], references: [id])
   /**
    * `critical | major | minor` — Stage 0.3's shared severity taxonomy
    * (`SEVERITY_DEFINITIONS`). Nullable until `classify()` sets it —
    * a deviation can be `detected` before anyone has assessed it yet.
    */
-  severity             String?
-  riskAssessmentId     String?         @map("risk_assessment_id") @db.Uuid
-  riskAssessment       RiskAssessment? @relation(fields: [riskAssessmentId], references: [id])
-  containmentActions   String?         @map("containment_actions")
+  severity                   String?
+  riskAssessmentId           String?         @map("risk_assessment_id") @db.Uuid
+  riskAssessment             RiskAssessment? @relation(fields: [riskAssessmentId], references: [id])
+  containmentActions         String?         @map("containment_actions")
   /**
    * Computed at `classify()` time — a plain `detectedAt + offset`
    * calendar-day field (🧭 30 days for Major/Critical, 10 for Minor,
@@ -7457,13 +7583,21 @@ model Deviation {
    * clock. Mirrors `RegFeeInvoice.dueAt`/`RegPostMarketObligation.dueAt`'s
    * own plain-column precedent instead.
    */
-  investigationDueAt   DateTime?       @map("investigation_due_at") @db.Timestamptz(3)
-  status               String          @default("detected")
-  closedAt             DateTime?       @map("closed_at") @db.Timestamptz(3)
-  createdBy            String?         @map("created_by") @db.Uuid
-  creator              User?           @relation("deviation_created_by", fields: [createdBy], references: [id])
-  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  investigationDueAt         DateTime?       @map("investigation_due_at") @db.Timestamptz(3)
+  /**
+   * Pass A2 — the furthest investigation-due reminder already sent for
+   * the current `investigationDueAt` (`approaching` or `overdue`), or
+   * null if none. Stored on the row (not derived from audit history) so
+   * the daily scan is idempotent per stage. Reset to null whenever the
+   * due date is recomputed (re-classification).
+   */
+  investigationReminderStage String?         @map("investigation_reminder_stage")
+  status                     String          @default("detected")
+  closedAt                   DateTime?       @map("closed_at") @db.Timestamptz(3)
+  createdBy                  String?         @map("created_by") @db.Uuid
+  creator                    User?           @relation("deviation_created_by", fields: [createdBy], references: [id])
+  createdAt                  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   investigation Investigation?
 
@@ -7854,6 +7988,12 @@ model FalsifiedProductReport {
   reportedBy          String?  @map("reported_by") @db.Uuid
   reporter            User?    @relation("falsified_product_report_reported_by", fields: [reportedBy], references: [id])
   source              String
+  /**
+   * Real-usage item (7 Oct 2026) — the code read by the in-app camera
+   * scanner (or typed manually when the browser has no barcode-scanning
+   * API) when `source` is `scan_feature`. Null for every other source.
+   */
+  scannedCode         String?  @map("scanned_code")
   evidenceDescription String   @map("evidence_description")
   evidenceDocumentIds String[] @default([]) @map("evidence_document_ids")
   authorityNotified   Boolean  @default(false) @map("authority_notified")
@@ -8009,27 +8149,31 @@ model ValidationReport {
  * instead of fabricating one.
  */
 model EnvironmentalMonitoringResult {
-  id              String    @id @db.Uuid
-  companyId       String    @map("company_id") @db.Uuid
-  company         Company   @relation(fields: [companyId], references: [id])
-  facilityId      String    @map("facility_id") @db.Uuid
-  facility        Facility  @relation(fields: [facilityId], references: [id])
-  /** `A | B | C | D` — EU GMP Annex 1 cleanroom grade. */
-  cleanroomGrade  String    @map("cleanroom_grade")
-  /** `viable_air | viable_surface | viable_personnel | non_viable_particle`. */
-  monitoringType  String    @map("monitoring_type")
-  sampleLocation  String?   @map("sample_location")
-  result          String
-  alertLimit      String?   @map("alert_limit")
-  actionLimit     String?   @map("action_limit")
-  excursion       Boolean   @default(false)
-  excursionLevel  String?   @map("excursion_level")
-  sampledAt       DateTime  @map("sampled_at") @db.Timestamptz(3)
-  notes           String?
-  recordedBy      String?   @map("recorded_by") @db.Uuid
-  recorder        User?     @relation("environmental_monitoring_recorded_by", fields: [recordedBy], references: [id])
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id             String   @id @db.Uuid
+  companyId      String   @map("company_id") @db.Uuid
+  company        Company  @relation(fields: [companyId], references: [id])
+  facilityId     String   @map("facility_id") @db.Uuid
+  facility       Facility @relation(fields: [facilityId], references: [id])
+  /**
+   * `A | B | C | D` — EU GMP Annex 1 cleanroom grade.
+   */
+  cleanroomGrade String   @map("cleanroom_grade")
+  /**
+   * `viable_air | viable_surface | viable_personnel | non_viable_particle`.
+   */
+  monitoringType String   @map("monitoring_type")
+  sampleLocation String?  @map("sample_location")
+  result         String
+  alertLimit     String?  @map("alert_limit")
+  actionLimit    String?  @map("action_limit")
+  excursion      Boolean  @default(false)
+  excursionLevel String?  @map("excursion_level")
+  sampledAt      DateTime @map("sampled_at") @db.Timestamptz(3)
+  notes          String?
+  recordedBy     String?  @map("recorded_by") @db.Uuid
+  recorder       User?    @relation("environmental_monitoring_recorded_by", fields: [recordedBy], references: [id])
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([companyId])
   @@index([companyId, facilityId, sampledAt])
@@ -8048,24 +8192,28 @@ model EnvironmentalMonitoringResult {
  * (see that service's doc comment, which named this exact gap).
  */
 model StabilityStudy {
-  id               String               @id @db.Uuid
-  companyId        String               @map("company_id") @db.Uuid
-  company          Company              @relation(fields: [companyId], references: [id])
-  productId        String               @map("product_id") @db.Uuid
-  product          Product              @relation(fields: [productId], references: [id])
-  batchId          String?              @map("batch_id") @db.Uuid
-  batch            Batch?               @relation(fields: [batchId], references: [id])
-  specificationId  String?              @map("specification_id") @db.Uuid
-  specification    Specification?       @relation(fields: [specificationId], references: [id])
-  /** `long_term_30c_75rh | intermediate_30c_65rh | accelerated_40c_75rh | long_term_25c_60rh`. */
-  storageCondition String               @map("storage_condition")
-  startDate        DateTime             @map("start_date") @db.Date
-  /** `in_progress | completed | terminated`. */
-  status           String               @default("in_progress")
-  createdBy        String?              @map("created_by") @db.Uuid
-  creator          User?                @relation("stability_study_created_by", fields: [createdBy], references: [id])
-  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               String         @id @db.Uuid
+  companyId        String         @map("company_id") @db.Uuid
+  company          Company        @relation(fields: [companyId], references: [id])
+  productId        String         @map("product_id") @db.Uuid
+  product          Product        @relation(fields: [productId], references: [id])
+  batchId          String?        @map("batch_id") @db.Uuid
+  batch            Batch?         @relation(fields: [batchId], references: [id])
+  specificationId  String?        @map("specification_id") @db.Uuid
+  specification    Specification? @relation(fields: [specificationId], references: [id])
+  /**
+   * `long_term_30c_75rh | intermediate_30c_65rh | accelerated_40c_75rh | long_term_25c_60rh`.
+   */
+  storageCondition String         @map("storage_condition")
+  startDate        DateTime       @map("start_date") @db.Date
+  /**
+   * `in_progress | completed | terminated`.
+   */
+  status           String         @default("in_progress")
+  createdBy        String?        @map("created_by") @db.Uuid
+  creator          User?          @relation("stability_study_created_by", fields: [createdBy], references: [id])
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   timepoints StabilityTimepoint[]
 
@@ -8088,12 +8236,18 @@ model StabilityTimepoint {
   company          Company        @relation(fields: [companyId], references: [id])
   stabilityStudyId String         @map("stability_study_id") @db.Uuid
   stabilityStudy   StabilityStudy @relation(fields: [stabilityStudyId], references: [id])
-  /** Months from `StabilityStudy.startDate` — 0, 3, 6, 9, 12, 18, 24, 36. */
+  /**
+   * Months from `StabilityStudy.startDate` — 0, 3, 6, 9, 12, 18, 24, 36.
+   */
   timepointMonths  Int            @map("timepoint_months")
   pullDate         DateTime?      @map("pull_date") @db.Date
-  /** `scheduled | pulled | tested | results_recorded`. */
+  /**
+   * `scheduled | pulled | tested | results_recorded`.
+   */
   status           String         @default("scheduled")
-  /** `[{ parameterId, parameterName, result, withinSpec }]` — one entry per tested `SpecificationParameter`. */
+  /**
+   * `[{ parameterId, parameterName, result, withinSpec }]` — one entry per tested `SpecificationParameter`.
+   */
   results          Json?
   withinSpec       Boolean?       @map("within_spec")
   recordedBy       String?        @map("recorded_by") @db.Uuid
@@ -8104,4 +8258,192 @@ model StabilityTimepoint {
   @@index([companyId])
   @@index([stabilityStudyId])
   @@map("stability_timepoint")
+}
+
+/**
+ * QualCloud Phase 1 Pass B (item B) — a 7-step, evidence-tracked pharmaceutical
+ * waste disposal case. Step completion is DERIVED from the populated fields
+ * (see `WasteDisposalCaseService.deriveSteps()`), never stored as a status flag,
+ * so the step view can never drift from the evidence it claims to summarise.
+ * `status` is only `open | closed`, set by the closure action alone.
+ */
+model WasteDisposalCase {
+  id                            String                      @id @db.Uuid
+  companyId                     String                      @map("company_id") @db.Uuid
+  company                       Company                     @relation(fields: [companyId], references: [id])
+  caseNumber                    String                      @map("case_number")
+  status                        String                      @default("open")
+  productId                     String?                     @map("product_id") @db.Uuid
+  product                       Product?                    @relation(fields: [productId], references: [id])
+  batchId                       String?                     @map("batch_id") @db.Uuid
+  batch                         Batch?                      @relation(fields: [batchId], references: [id])
+  wasteDescription              String                      @map("waste_description")
+  quantity                      String
+  unit                          String
+  weighedAt                     DateTime                    @map("weighed_at") @db.Timestamptz(3)
+  // Step 2 — PPB application and statutory fee
+  applicationReference          String?                     @map("application_reference")
+  invoiceReference              String?                     @map("invoice_reference")
+  feeAmountKes                  Int?                        @map("fee_amount_kes")
+  applicationSubmittedAt        DateTime?                   @map("application_submitted_at") @db.Timestamptz(3)
+  // Step 3 — invoice and payment evidence
+  invoiceDocumentId             String?                     @map("invoice_document_id") @db.Uuid
+  invoiceDocument               Document?                   @relation("wdc_invoice", fields: [invoiceDocumentId], references: [id])
+  paymentReceiptDocumentId      String?                     @map("payment_receipt_document_id") @db.Uuid
+  paymentReceiptDocument        Document?                   @relation("wdc_receipt", fields: [paymentReceiptDocumentId], references: [id])
+  evidenceAttachedAt            DateTime?                   @map("evidence_attached_at") @db.Timestamptz(3)
+  // Step 4 — authorised disposal company handover and PPB verification
+  disposalCompanyName           String?                     @map("disposal_company_name")
+  handoverCertificateDocumentId String?                     @map("handover_certificate_document_id") @db.Uuid
+  handoverCertificateDocument   Document?                   @relation("wdc_handover_certificate", fields: [handoverCertificateDocumentId], references: [id])
+  handedOverAt                  DateTime?                   @map("handed_over_at") @db.Timestamptz(3)
+  ppbVerifiedAt                 DateTime?                   @map("ppb_verified_at") @db.Timestamptz(3)
+  ppbVerifiedByUserId           String?                     @map("ppb_verified_by_user_id") @db.Uuid
+  ppbVerifiedBy                 User?                       @relation("wdc_ppb_verified_by", fields: [ppbVerifiedByUserId], references: [id])
+  // Step 5 — destruction under supervision, photos converted to one PDF
+  destructionDate               DateTime?                   @map("destruction_date") @db.Date
+  destructionLocation           String?                     @map("destruction_location")
+  destructionRecordedAt         DateTime?                   @map("destruction_recorded_at") @db.Timestamptz(3)
+  destructionPdfDocumentId      String?                     @map("destruction_pdf_document_id") @db.Uuid
+  destructionPdfDocument        Document?                   @relation("wdc_destruction_pdf", fields: [destructionPdfDocumentId], references: [id])
+  // Step 6 — PPB Certificate of Safe Disposal
+  ppbCertificateDocumentId      String?                     @map("ppb_certificate_document_id") @db.Uuid
+  ppbCertificateDocument        Document?                   @relation("wdc_ppb_certificate", fields: [ppbCertificateDocumentId], references: [id])
+  ppbCertificateAttachedAt      DateTime?                   @map("ppb_certificate_attached_at") @db.Timestamptz(3)
+  // Step 7 — closure (manager-level)
+  closedAt                      DateTime?                   @map("closed_at") @db.Timestamptz(3)
+  closedByUserId                String?                     @map("closed_by_user_id") @db.Uuid
+  closedBy                      User?                       @relation("wdc_closed_by", fields: [closedByUserId], references: [id])
+  createdBy                     String?                     @map("created_by") @db.Uuid
+  creator                       User?                       @relation("wdc_created_by", fields: [createdBy], references: [id])
+  createdAt                     DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                     DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  attendees                     WasteDisposalCaseAttendee[]
+  photos                        WasteDisposalCasePhoto[]
+  /**
+   * Real-usage item (7 Oct 2026) — a cage weighing often mixes several
+   * products, each its own batch, weighed together as one lot. `items`
+   * is the real list; the single `productId`/`batchId` columns above
+   * are kept only for pre-existing rows created before this change and
+   * are no longer written by new cases (both nullable, unused going
+   * forward).
+   */
+  items                         WasteDisposalCaseItem[]
+
+  @@unique([companyId, caseNumber])
+  @@index([companyId, status])
+  @@map("waste_disposal_case")
+}
+
+/**
+ * Real-usage item (7 Oct 2026) — one product/batch pair weighed as
+ * part of a multi-product waste disposal case. `batchId` is required:
+ * the client always disposes of a specific batch, never an unbatched
+ * product.
+ */
+model WasteDisposalCaseItem {
+  id        String            @id @db.Uuid
+  companyId String            @map("company_id") @db.Uuid
+  company   Company           @relation(fields: [companyId], references: [id])
+  caseId    String            @map("case_id") @db.Uuid
+  wasteCase WasteDisposalCase @relation(fields: [caseId], references: [id])
+  productId String            @map("product_id") @db.Uuid
+  product   Product           @relation(fields: [productId], references: [id])
+  batchId   String            @map("batch_id") @db.Uuid
+  batch     Batch             @relation(fields: [batchId], references: [id])
+  sortOrder Int               @default(0) @map("sort_order")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([caseId, batchId])
+  @@index([companyId, caseId])
+  @@map("waste_disposal_case_item")
+}
+
+/**
+ * Pass B — a person present at destruction. `attendeeRole` is `client_representative | ppb_officer | other`.
+ */
+model WasteDisposalCaseAttendee {
+  id           String            @id @db.Uuid
+  companyId    String            @map("company_id") @db.Uuid
+  company      Company           @relation(fields: [companyId], references: [id])
+  caseId       String            @map("case_id") @db.Uuid
+  wasteCase    WasteDisposalCase @relation(fields: [caseId], references: [id])
+  name         String
+  organisation String
+  attendeeRole String            @map("attendee_role")
+  sortOrder    Int               @default(0) @map("sort_order")
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  /**
+   * Withdrawn, never deleted — the row and its audit trail survive.
+   */
+  withdrawnAt  DateTime?         @map("withdrawn_at") @db.Timestamptz(3)
+
+  @@index([companyId, caseId])
+  @@map("waste_disposal_case_attendee")
+}
+
+/**
+ * Pass B — one destruction photo original (kept), linked to its case. The combined PDF is a separate Document.
+ */
+model WasteDisposalCasePhoto {
+  id         String            @id @db.Uuid
+  companyId  String            @map("company_id") @db.Uuid
+  company    Company           @relation(fields: [companyId], references: [id])
+  caseId     String            @map("case_id") @db.Uuid
+  wasteCase  WasteDisposalCase @relation(fields: [caseId], references: [id])
+  documentId String            @map("document_id") @db.Uuid
+  document   Document          @relation("wdc_photo", fields: [documentId], references: [id])
+  sortOrder  Int               @default(0) @map("sort_order")
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([companyId, caseId])
+  @@map("waste_disposal_case_photo")
+}
+
+/**
+ * Pass B (item D2) — one biennial supplier performance review. Carries the
+ * uploaded supplier checklist document and the performance flags raised at
+ * that review. Append-only: a new review is a new row, never an update.
+ */
+model SupplierPerformanceReview {
+  id                  String   @id @db.Uuid
+  companyId           String   @map("company_id") @db.Uuid
+  company             Company  @relation(fields: [companyId], references: [id])
+  supplierId          String   @map("supplier_id") @db.Uuid
+  supplier            Supplier @relation(fields: [supplierId], references: [id])
+  checklistDocumentId String   @map("checklist_document_id") @db.Uuid
+  checklistDocument   Document @relation("supplier_review_checklist", fields: [checklistDocumentId], references: [id])
+  performanceFlags    String[] @default([]) @map("performance_flags")
+  notes               String?
+  reviewedBy          String?  @map("reviewed_by") @db.Uuid
+  reviewer            User?    @relation("supplier_performance_review_by", fields: [reviewedBy], references: [id])
+  reviewedAt          DateTime @default(now()) @map("reviewed_at") @db.Timestamptz(3)
+  nextReviewDueAt     DateTime @map("next_review_due_at") @db.Timestamptz(3)
+
+  @@index([companyId, supplierId])
+  @@map("supplier_performance_review")
+}
+
+/**
+ * Pass B (item E) — one attendee row on a management review. Add/remove is audited per change.
+ */
+model ManagementReviewAttendee {
+  id                 String           @id @db.Uuid
+  companyId          String           @map("company_id") @db.Uuid
+  company            Company          @relation(fields: [companyId], references: [id])
+  managementReviewId String           @map("management_review_id") @db.Uuid
+  managementReview   ManagementReview @relation(fields: [managementReviewId], references: [id])
+  name               String
+  roleOrOrganisation String?          @map("role_or_organisation")
+  sortOrder          Int              @default(0) @map("sort_order")
+  createdBy          String?          @map("created_by") @db.Uuid
+  creator            User?            @relation("management_review_attendee_created_by", fields: [createdBy], references: [id])
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  /**
+   * Withdrawn, never deleted — the row and its audit trail survive.
+   */
+  withdrawnAt        DateTime?        @map("withdrawn_at") @db.Timestamptz(3)
+
+  @@index([companyId, managementReviewId])
+  @@map("management_review_attendee")
 }

@@ -11,6 +11,7 @@ import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import { DirectUploadFile, DocumentsService } from '../documents/documents.service'
 import { InternalAuditService } from '../internal-audit/internal-audit.service'
 import { TasksService } from '../tasks/tasks.service'
 import {
@@ -54,6 +55,15 @@ function requireCompany(actor: AuthenticatedUser): string {
  * own parameter" framing, applied here to incoming-material CoA review
  * rather than a finished-product OOS.
  */
+/** Pass B (item D3) — the biennial supplier performance review cadence. */
+export const BIENNIAL_REVIEW_MONTHS = 24
+
+function addMonths(date: Date, months: number): Date {
+  const out = new Date(date)
+  out.setUTCMonth(out.getUTCMonth() + months)
+  return out
+}
+
 function evaluateResult(
   resultValue: string,
   lowerLimit: string | null,
@@ -98,7 +108,95 @@ export class SupplierQualificationService {
     private readonly auditService: AuditService,
     private readonly internalAuditService: InternalAuditService,
     private readonly tasksService: TasksService,
+    private readonly documentsService: DocumentsService,
   ) {}
+
+  /**
+   * Pass B (item D1) — the supplier's GMP certificate, uploaded against the
+   * supplier record. `approve()` refuses to approve a supplier that has none,
+   * so the requirement is enforced in the service, not only the UI.
+   */
+  async attachGmpCertificate(
+    actor: AuthenticatedUser,
+    supplierId: string,
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ) {
+    const companyId = requireCompany(actor)
+    const supplierName = await this.requireSupplierName(companyId, supplierId)
+    const uploaded = await this.documentsService.uploadDirect(
+      actor,
+      SUPPLIER_RECORD_TYPE,
+      supplierId,
+      file,
+      { title: `GMP certificate — ${supplierName}` },
+      meta,
+    )
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const updated = await tx.supplier.update({
+        where: { id: supplierId },
+        data: { gmpCertificateDocumentId: uploaded.document.id },
+      })
+      await this.auditService.log(tx, {
+        actorUserId: actor.sub,
+        companyId,
+        action: 'supplier_gmp_certificate_attached',
+        recordType: SUPPLIER_RECORD_TYPE,
+        recordId: supplierId,
+        newValue: { documentId: uploaded.document.id, filename: file.originalname },
+        ip: meta.ip,
+      })
+      return updated
+    })
+  }
+
+  /**
+   * Pass B (item D2) — uploads the biennial review checklist and returns its
+   * document id. `monitor()` then attaches it to the review record it creates.
+   */
+  async uploadReviewChecklist(
+    actor: AuthenticatedUser,
+    supplierId: string,
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ): Promise<{ documentId: string }> {
+    const companyId = requireCompany(actor)
+    const supplierName = await this.requireSupplierName(companyId, supplierId)
+    const uploaded = await this.documentsService.uploadDirect(
+      actor,
+      SUPPLIER_RECORD_TYPE,
+      supplierId,
+      file,
+      {
+        title: `Supplier review checklist — ${supplierName} — ${new Date().toISOString().slice(0, 10)}`,
+      },
+      meta,
+    )
+    return { documentId: uploaded.document.id }
+  }
+
+  async listReviews(actor: AuthenticatedUser, supplierId: string) {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      await this.requireSupplierName(companyId, supplierId)
+      return tx.supplierPerformanceReview.findMany({
+        where: { companyId, supplierId },
+        include: { checklistDocument: { select: { id: true, title: true } } },
+        orderBy: { reviewedAt: 'desc' },
+      })
+    })
+  }
+
+  private async requireSupplierName(companyId: string, supplierId: string): Promise<string> {
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const found = await tx.supplier.findFirst({
+        where: { id: supplierId, companyId },
+        select: { name: true },
+      })
+      if (!found) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      return found.name
+    })
+  }
 
   private async getRequalificationMonths(
     tx: Prisma.TransactionClient,
@@ -132,7 +230,8 @@ export class SupplierQualificationService {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const supplier = await tx.supplier.findFirst({ where: { id: supplierId, companyId } })
-      if (!supplier) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      if (!supplier)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
 
       const totalWeight = dto.criteria.reduce((sum, c) => sum + c.weight, 0)
       const weightedScore = dto.criteria.reduce((sum, c) => sum + c.weight * c.score, 0)
@@ -216,7 +315,15 @@ export class SupplierQualificationService {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const existing = await tx.supplier.findFirst({ where: { id: supplierId, companyId } })
-      if (!existing) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      if (!existing)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      // Pass B (item D1): approval needs the supplier's GMP certificate on file.
+      if (dto.approvalStatus === 'approved' && !existing.gmpCertificateDocumentId) {
+        throw new ConflictException({
+          code: 'GMP_CERTIFICATE_REQUIRED',
+          message: "Upload the supplier's GMP certificate before approving this supplier.",
+        })
+      }
 
       const now = new Date()
       let nextRequalificationDueAt = existing.nextRequalificationDueAt
@@ -236,7 +343,11 @@ export class SupplierQualificationService {
           nextRequalificationDueAt,
           lastQualifiedAt,
           ...(dto.note
-            ? { performanceFlags: { push: `[${now.toISOString()}] ${dto.approvalStatus}: ${dto.note}` } }
+            ? {
+                performanceFlags: {
+                  push: `[${now.toISOString()}] ${dto.approvalStatus}: ${dto.note}`,
+                },
+              }
             : {}),
         },
       })
@@ -266,12 +377,44 @@ export class SupplierQualificationService {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const existing = await tx.supplier.findFirst({ where: { id: supplierId, companyId } })
-      if (!existing) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      if (!existing)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      const checklist = await tx.document.findFirst({
+        where: {
+          id: dto.checklistDocumentId,
+          companyId,
+          recordType: SUPPLIER_RECORD_TYPE,
+          recordId: supplierId,
+        },
+      })
+      if (!checklist) {
+        throw new BadRequestException({
+          code: 'CHECKLIST_NOT_FOUND',
+          message: 'Upload the review checklist for this supplier first, then record the review.',
+        })
+      }
 
-      const entry = `[${new Date().toISOString()}] ${dto.flag}`
+      const now = new Date()
+      const entry = `[${now.toISOString()}] ${dto.flag}`
       const updated = await tx.supplier.update({
         where: { id: supplierId },
         data: { performanceFlags: { push: entry } },
+      })
+      // Pass B (item D2/D3): every review is its own record. The next biennial
+      // review is due 24 months after this one.
+      const nextReviewDueAt = addMonths(now, BIENNIAL_REVIEW_MONTHS)
+      await tx.supplierPerformanceReview.create({
+        data: {
+          id: newId(),
+          companyId,
+          supplierId,
+          checklistDocumentId: checklist.id,
+          performanceFlags: [dto.flag],
+          notes: dto.notes ?? null,
+          reviewedBy: actor.sub,
+          reviewedAt: now,
+          nextReviewDueAt,
+        },
       })
 
       await this.auditService.log(tx, {
@@ -280,7 +423,7 @@ export class SupplierQualificationService {
         action: 'supplier_performance_flagged',
         recordType: SUPPLIER_RECORD_TYPE,
         recordId: supplierId,
-        newValue: { flag: dto.flag },
+        newValue: { flag: dto.flag, checklistDocumentId: checklist.id, nextReviewDueAt },
         ip: meta.ip,
       })
 
@@ -311,14 +454,18 @@ export class SupplierQualificationService {
       const supplier = await tx.supplier.findFirst({
         where: { id: dto.supplierId, companyId },
       })
-      if (!supplier) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
+      if (!supplier)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Supplier not found' })
 
       const spec = await tx.specification.findFirst({
         where: { id: dto.materialSpecificationId, companyId },
         include: { parameters: true },
       })
       if (!spec)
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Material specification not found' })
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Material specification not found',
+        })
       if (!['raw_material', 'api'].includes(spec.specificationType)) {
         throw new BadRequestException({
           code: 'NOT_A_MATERIAL_SPECIFICATION',
@@ -328,7 +475,9 @@ export class SupplierQualificationService {
 
       const results = dto.results.map((r) => {
         const param = spec.parameters.find((p) => p.id === r.parameterId)
-        const pass = param ? evaluateResult(r.resultValue, param.lowerLimit, param.upperLimit) : false
+        const pass = param
+          ? evaluateResult(r.resultValue, param.lowerLimit, param.upperLimit)
+          : false
         return { ...r, pass }
       })
       const allPass = results.every((r) => r.pass)
@@ -382,7 +531,10 @@ export class SupplierQualificationService {
       const existing = await tx.certificateOfAnalysis.findFirst({ where: { id, companyId } })
       if (!existing) throw new NotFoundException({ code: 'NOT_FOUND', message: 'CoA not found' })
       if (existing.reviewedAt) {
-        throw new ConflictException({ code: 'ALREADY_REVIEWED', message: 'This CoA is already reviewed' })
+        throw new ConflictException({
+          code: 'ALREADY_REVIEWED',
+          message: 'This CoA is already reviewed',
+        })
       }
 
       const updated = await tx.certificateOfAnalysis.update({

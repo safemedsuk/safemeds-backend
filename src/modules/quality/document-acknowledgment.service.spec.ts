@@ -80,9 +80,16 @@ function buildHarness() {
 
 describe('DocumentAcknowledgmentService', () => {
   describe('assignReaders()', () => {
-    it('rejects assigning readers to a document not yet effective', async () => {
+    it('allows pre-assigning readers while the document is in review (Pass A)', async () => {
       const { service, tables } = buildHarness()
-      tables.sop.rows.set('sop-1', { ...tables.sop.rows.get('sop-1')!, status: 'draft' })
+      tables.sop.rows.set('sop-1', { ...tables.sop.rows.get('sop-1')!, status: 'in_review' })
+      const created = await service.assignReaders(actor, 'sop-1', { userIds: ['reader-1'] }, {})
+      expect(created).toHaveLength(1)
+    })
+
+    it('rejects assigning readers to a superseded or retired document', async () => {
+      const { service, tables } = buildHarness()
+      tables.sop.rows.set('sop-1', { ...tables.sop.rows.get('sop-1')!, status: 'retired' })
       await expect(
         service.assignReaders(actor, 'sop-1', { userIds: ['reader-1'] }, {}),
       ).rejects.toThrow(ConflictException)
@@ -98,9 +105,9 @@ describe('DocumentAcknowledgmentService', () => {
       )
       expect(created).toHaveLength(2)
       expect(tables.documentAcknowledgment.rows.size).toBe(2)
-      expect([...tables.documentAcknowledgment.rows.values()].every((r) => r.versionAcknowledged === 1)).toBe(
-        true,
-      )
+      expect(
+        [...tables.documentAcknowledgment.rows.values()].every((r) => r.versionAcknowledged === 1),
+      ).toBe(true)
     })
 
     it('is idempotent — assigning the same reader twice does not duplicate the row', async () => {
@@ -138,7 +145,10 @@ describe('DocumentAcknowledgmentService', () => {
   describe('listForDocument() — overdue computation', () => {
     it('flags an unacknowledged assignment as overdue once the window has passed', async () => {
       const { service, tables } = buildHarness()
-      tables.sop.rows.set('sop-1', { ...tables.sop.rows.get('sop-1')!, acknowledgmentWindowDays: 5 })
+      tables.sop.rows.set('sop-1', {
+        ...tables.sop.rows.get('sop-1')!,
+        acknowledgmentWindowDays: 5,
+      })
       const longAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
       tables.documentAcknowledgment.rows.set('ack-1', {
         id: 'ack-1',
@@ -186,6 +196,14 @@ describe('DocumentAcknowledgmentService', () => {
 
       const rows = await service.listForDocument(actor, 'sop-1')
       expect(rows[0].overdue).toBe(false)
+    })
+  })
+
+  describe('acknowledge() — Pass A effective-only guard', () => {
+    it('refuses a read-and-understand acknowledgment while the document is still in review', async () => {
+      const { service, tables } = buildHarness()
+      tables.sop.rows.set('sop-1', { ...tables.sop.rows.get('sop-1')!, status: 'in_review' })
+      await expect(service.acknowledge(reader, 'sop-1', {})).rejects.toThrow(ConflictException)
     })
   })
 })

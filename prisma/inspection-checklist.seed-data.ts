@@ -1,18 +1,13 @@
 /**
- * QualCloud (Phase 13) Stage 9 — the "map each PPB/East African GMP
- * Compendium item to a QualCloud record" requirement. Seeded today as a
- * structurally-real, `unverified: true` set of section headings drawn
- * straight from the Build Priority doc's own verified inspection-scope
- * list (premises, equipment, processes, personnel competence,
- * documentation, quality control, storage, input traceability) — each
- * mapped to the QualCloud record type that answers it. This mirrors
- * `AUDIT_REQUIREMENTS`'s own precedent (VigiCloud Stage 16.2) exactly:
- * a real starting structure, honestly flagged as not yet a per-item
- * guideline citation, until a field expert confirms the real East
- * African GMP Compendium wording — see `todo-qualcloud.md`'s own open
- * item 3 ("The real East African GMP Compendium's literal
- * inspection-checklist text, to replace the currently-structural-but-
- * `unverified` checklist template").
+ * QualCloud (Phase 13) Stage 9 — the inspection checklist, seeded from the
+ * build spec's own outline (`todo-qualcloud.md`, Stage 9): eight inspection
+ * areas — premises, equipment, processes, personnel competence,
+ * documentation, quality control, storage, input traceability — each mapped
+ * to the QualCloud record type that answers it. These are the authoritative
+ * sections for the readiness snapshot (Pass A: the "structural placeholder"
+ * wording was retired). Each area is still a plain-language outline, not a
+ * clause-by-clause transcription of the East African GMP Compendium; a
+ * company can add its own sections through the admin console.
  *
  * `mappedRecordType` is a resolver key read by
  * `InspectionReadinessService`'s own `SYSTEM_RESOLVERS` map — never a

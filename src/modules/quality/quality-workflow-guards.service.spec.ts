@@ -41,9 +41,9 @@ function buildHarness() {
 }
 
 describe('QualityWorkflowGuards — registration', () => {
-  it('registers 8 guards and 5 status-syncs', () => {
+  it('registers 10 guards and 5 status-syncs (Pass A2 added the investigation report and manufacturing report guards)', () => {
     const { guardRegister, statusSyncRegister } = buildHarness()
-    expect(guardRegister).toHaveBeenCalledTimes(8)
+    expect(guardRegister).toHaveBeenCalledTimes(10)
     expect(statusSyncRegister).toHaveBeenCalledTimes(5)
   })
 })
@@ -147,7 +147,10 @@ describe('QualityWorkflowGuards — Sop (Document Control)', () => {
       where: { id: 'wi-old' },
       data: expect.objectContaining({ currentStateId: 'state-superseded' }),
     })
-    expect(sopUpdate).toHaveBeenCalledWith({ where: { id: 'sop-old' }, data: { status: 'superseded' } })
+    expect(sopUpdate).toHaveBeenCalledWith({
+      where: { id: 'sop-old' },
+      data: { status: 'superseded' },
+    })
   })
 
   it('status-sync does nothing extra for a fresh document with no prior version', async () => {
@@ -227,7 +230,12 @@ describe('QualityWorkflowGuards — Deviation', () => {
     const guard = guardFor(QUALITY_DEVIATION_RECORD_TYPE, 'capa_pending')
 
     const noCapa = await guard({
-      tx: { capa: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0) } } as never,
+      tx: {
+        capa: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          count: jest.fn().mockResolvedValue(0),
+        },
+      } as never,
       companyId: 'company-1',
       recordId: 'dev-1',
       toStateKey: 'closed',
@@ -253,7 +261,10 @@ describe('QualityWorkflowGuards — Deviation', () => {
 
     const closedCapa = await guard({
       tx: {
-        capa: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(1) },
+        capa: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          count: jest.fn().mockResolvedValue(1),
+        },
       } as never,
       companyId: 'company-1',
       recordId: 'dev-1',
@@ -267,9 +278,14 @@ describe('QualityWorkflowGuards — Deviation', () => {
     const { syncFor } = buildHarness()
     const sync = syncFor(QUALITY_DEVIATION_RECORD_TYPE)
     const detectedAt = new Date('2026-09-01T00:00:00.000Z')
-    const deviationUpdate = jest.fn().mockResolvedValue({ deviationNumber: 'DEV-2026-00001', title: 'x' })
+    const deviationUpdate = jest
+      .fn()
+      .mockResolvedValue({ deviationNumber: 'DEV-2026-00001', title: 'x' })
     const tx = {
-      deviation: { findUnique: jest.fn().mockResolvedValue({ detectedAt }), update: deviationUpdate },
+      deviation: {
+        findUnique: jest.fn().mockResolvedValue({ detectedAt }),
+        update: deviationUpdate,
+      },
       role: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findMany: jest.fn() },
     } as never
@@ -300,7 +316,10 @@ describe('QualityWorkflowGuards — Deviation', () => {
       .fn()
       .mockResolvedValue({ deviationNumber: 'DEV-2026-00002', title: 'Critical mix-up' })
     const tx = {
-      deviation: { findUnique: jest.fn().mockResolvedValue({ detectedAt }), update: deviationUpdate },
+      deviation: {
+        findUnique: jest.fn().mockResolvedValue({ detectedAt }),
+        update: deviationUpdate,
+      },
       role: { findMany: jest.fn().mockResolvedValue([{ key: 'QUALITY_MANAGER' }]) },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'qm-1', email: 'qm@example.com' }]),
@@ -375,7 +394,9 @@ describe('QualityWorkflowGuards — Change Control', () => {
     const noApprovals = await guard({
       tx: {
         changeControl: {
-          findUnique: jest.fn().mockResolvedValue({ impactAssessment: null, crossFunctionalApprovals: [] }),
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ impactAssessment: null, crossFunctionalApprovals: [] }),
         },
       } as never,
       companyId: 'company-1',
@@ -441,7 +462,9 @@ describe('QualityWorkflowGuards — Change Control', () => {
     const guard = guardFor(QUALITY_CHANGE_CONTROL_RECORD_TYPE, 'verifying')
 
     const missing = await guard({
-      tx: { changeControl: { findUnique: jest.fn().mockResolvedValue({ verificationResult: null }) } } as never,
+      tx: {
+        changeControl: { findUnique: jest.fn().mockResolvedValue({ verificationResult: null }) },
+      } as never,
       companyId: 'company-1',
       recordId: 'cc-1',
       toStateKey: 'closed',
@@ -452,7 +475,9 @@ describe('QualityWorkflowGuards — Change Control', () => {
     const present = await guard({
       tx: {
         changeControl: {
-          findUnique: jest.fn().mockResolvedValue({ verificationResult: 'No adverse effect observed' }),
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ verificationResult: 'No adverse effect observed' }),
         },
       } as never,
       companyId: 'company-1',
@@ -472,7 +497,10 @@ describe('QualityWorkflowGuards — Complaint', () => {
     const tx = { complaint: { update } } as never
 
     await sync({ tx, recordId: 'cmp-1', toStateKey: 'investigating', companyId: 'company-1' })
-    expect(update).toHaveBeenCalledWith({ where: { id: 'cmp-1' }, data: { status: 'investigating' } })
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'cmp-1' },
+      data: { status: 'investigating' },
+    })
   })
 })
 
@@ -507,7 +535,9 @@ describe('QualityWorkflowGuards — OOS/OOT Investigation', () => {
     const guard = guardFor(QUALITY_OOS_RECORD_TYPE, 'phase_1_lab_investigation')
 
     const noCause = await guard({
-      tx: { oos: { findUnique: jest.fn().mockResolvedValue({ phase1AssignableCauseFound: null }) } } as never,
+      tx: {
+        oos: { findUnique: jest.fn().mockResolvedValue({ phase1AssignableCauseFound: null }) },
+      } as never,
       companyId: 'company-1',
       recordId: 'oos-1',
       toStateKey: 'closed',
@@ -516,7 +546,9 @@ describe('QualityWorkflowGuards — OOS/OOT Investigation', () => {
     expect(noCause.allowed).toBe(false)
 
     const withCause = await guard({
-      tx: { oos: { findUnique: jest.fn().mockResolvedValue({ phase1AssignableCauseFound: true }) } } as never,
+      tx: {
+        oos: { findUnique: jest.fn().mockResolvedValue({ phase1AssignableCauseFound: true }) },
+      } as never,
       companyId: 'company-1',
       recordId: 'oos-1',
       toStateKey: 'closed',

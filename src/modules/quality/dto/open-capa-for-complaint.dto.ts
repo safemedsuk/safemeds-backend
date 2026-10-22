@@ -1,36 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger'
-import { IsDateString, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator'
+import { CapaAllocationDto } from '../../internal-audit/dto/capa-allocation.dto'
 
-export class OpenCapaForComplaintDto {
-  @MinLength(1)
-  @MaxLength(200)
-  @IsString()
-  title!: string
-
-  @MinLength(1)
-  @MaxLength(2000)
-  @IsString()
-  correctiveAction!: string
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  preventiveAction?: string
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  rootCauseCategory?: string
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsUUID()
-  ownerUserId?: string
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsDateString()
-  dueDate?: string
-}
+/** Pass A2 — the same allocation rules as every other CAPA (owner, separate due dates, root cause). */
+export class OpenCapaForComplaintDto extends CapaAllocationDto {}

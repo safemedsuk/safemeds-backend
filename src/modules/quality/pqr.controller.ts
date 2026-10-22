@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common'
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common'
 import { ApiTags } from '@nestjs/swagger'
 import type { Request } from 'express'
 
@@ -33,6 +33,24 @@ export class PqrController {
     @Req() req: Request,
   ) {
     return this.service.assemble(user, dto, { ip: req.ip })
+  }
+
+  /** Short-lived link to the archived PDF or Excel file of a signed APQR. */
+  @RequirePermissions('quality.view_pqr')
+  @Get(':id/download')
+  download(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('format') format: string | undefined,
+    @Req() req: Request,
+  ) {
+    if (format !== 'pdf' && format !== 'xlsx') {
+      throw new BadRequestException({
+        code: 'FORMAT_INVALID',
+        message: 'format must be pdf or xlsx',
+      })
+    }
+    return this.service.download(user, id, format, { ip: req.ip })
   }
 
   @RequirePermissions('quality.manage_pqr')

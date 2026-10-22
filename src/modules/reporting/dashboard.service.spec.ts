@@ -50,11 +50,7 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
     ) {
       return (row[key] as Date) >= (value as { gte: Date }).gte
     }
-    if (
-      value !== null &&
-      typeof value === 'object' &&
-      'gt' in (value as Record<string, unknown>)
-    ) {
+    if (value !== null && typeof value === 'object' && 'gt' in (value as Record<string, unknown>)) {
       return (row[key] as Date) > (value as { gt: Date }).gt
     }
     if (
@@ -183,7 +179,13 @@ function buildHarness(rows: {
   const productRegistrationFindMany = jest
     .fn()
     .mockImplementation(({ where }: { where: Record<string, unknown> }) =>
-      Promise.resolve((rows.productRegistrationsForOpenItems ?? []).filter((r) => matches(r, where))),
+      // Prisma's include always returns the relation array; default it so fixtures
+      // written for the expiring-soon query also satisfy the retention query.
+      Promise.resolve(
+        (rows.productRegistrationsForOpenItems ?? [])
+          .filter((r) => matches(r, where))
+          .map((r) => ({ regRetentions: [], ...r })),
+      ),
     )
   const regRetentionCount = jest
     .fn()
@@ -488,7 +490,7 @@ describe('DashboardService', () => {
 
   // testing-correction-explanation.md §4.2 — Phase 4B.
   describe('dossiersByKindAndStage', () => {
-    it('splits a wrapping RegVariation\'s variationType into renewal vs. variation, and no wrapper at all into registration', async () => {
+    it("splits a wrapping RegVariation's variationType into renewal vs. variation, and no wrapper at all into registration", async () => {
       const { service } = buildHarness({
         cases: [],
         deadlines: [],
@@ -497,8 +499,18 @@ describe('DashboardService', () => {
         dossiersWithVariation: [
           { id: 'd1', companyId: 'company-1', status: 'compiling', regVariation: null },
           { id: 'd2', companyId: 'company-1', status: 'compiling', regVariation: null },
-          { id: 'd3', companyId: 'company-1', status: 'submitted', regVariation: { variationType: 'renewal' } },
-          { id: 'd4', companyId: 'company-1', status: 'submitted', regVariation: { variationType: 'minor' } },
+          {
+            id: 'd3',
+            companyId: 'company-1',
+            status: 'submitted',
+            regVariation: { variationType: 'renewal' },
+          },
+          {
+            id: 'd4',
+            companyId: 'company-1',
+            status: 'submitted',
+            regVariation: { variationType: 'minor' },
+          },
         ],
       })
 
@@ -529,7 +541,10 @@ describe('DashboardService', () => {
             obligationType: 'annual_report',
             dueAt,
             productRegistrationId: 'reg-1',
-            productRegistration: { registrationNumber: 'PPB-2026-0001', product: { brandName: 'Depo-Provera' } },
+            productRegistration: {
+              registrationNumber: 'PPB-2026-0001',
+              product: { brandName: 'Depo-Provera' },
+            },
           },
           { id: 'o2', companyId: 'company-1', status: 'pending', dueAt },
         ],
@@ -537,7 +552,11 @@ describe('DashboardService', () => {
 
       const dashboard = await service.getDashboard(actor)
       expect(dashboard.regulatory.openItems.overduePostMarketObligations).toEqual([
-        { recordType: 'product_registration', recordId: 'reg-1', label: expect.stringContaining('Depo-Provera (PPB-2026-0001)') },
+        {
+          recordType: 'product_registration',
+          recordId: 'reg-1',
+          label: expect.stringContaining('Depo-Provera (PPB-2026-0001)'),
+        },
       ])
     })
 
@@ -557,15 +576,29 @@ describe('DashboardService', () => {
             status: 'open',
             receivedDate: longAgo,
             regDossierId: 'dossier-1',
-            regDossier: { id: 'dossier-1', product: { brandName: 'Amoxiclav' }, authority: { code: 'PPB' } },
+            regDossier: {
+              id: 'dossier-1',
+              product: { brandName: 'Amoxiclav' },
+              authority: { code: 'PPB' },
+            },
           },
-          { id: 'q2', companyId: 'company-1', status: 'open', receivedDate: recent, regDossierId: 'dossier-2' },
+          {
+            id: 'q2',
+            companyId: 'company-1',
+            status: 'open',
+            receivedDate: recent,
+            regDossierId: 'dossier-2',
+          },
         ],
       })
 
       const dashboard = await service.getDashboard(actor)
       expect(dashboard.regulatory.openItems.longOpenQueries).toEqual([
-        { recordType: 'reg_dossier', recordId: 'dossier-1', label: expect.stringContaining('Amoxiclav (PPB)') },
+        {
+          recordType: 'reg_dossier',
+          recordId: 'dossier-1',
+          label: expect.stringContaining('Amoxiclav (PPB)'),
+        },
       ])
     })
 
@@ -609,36 +642,89 @@ describe('DashboardService', () => {
     })
 
     it('never surfaces a retentions-due item outside the 1 Oct – 31 Dec window', async () => {
-      // Today's real date in this environment (2026-09-27) is outside the window — no fake clock needed to prove the negative case.
-      const { service } = buildHarness({
-        cases: [],
-        deadlines: [],
-        signals: [],
-        generatedReports: [],
-        productRegistrationsForOpenItems: [
-          { id: 'reg-1', companyId: 'company-1', status: 'active', expiresOn: new Date(Date.now() + 300 * 24 * 60 * 60 * 1000), regRetentions: [] },
+      // Pin the clock to mid-June (outside 1 Oct – 31 Dec) so this negative case holds on any real date.
+      jest.useFakeTimers({
+        now: new Date('2026-06-15T12:00:00Z'),
+        doNotFake: [
+          'nextTick',
+          'queueMicrotask',
+          'setImmediate',
+          'setTimeout',
+          'setInterval',
+          'clearTimeout',
+          'clearInterval',
+          'clearImmediate',
         ],
       })
+      try {
+        const { service } = buildHarness({
+          cases: [],
+          deadlines: [],
+          signals: [],
+          generatedReports: [],
+          productRegistrationsForOpenItems: [
+            {
+              id: 'reg-1',
+              companyId: 'company-1',
+              status: 'active',
+              expiresOn: new Date(Date.now() + 300 * 24 * 60 * 60 * 1000),
+              regRetentions: [],
+            },
+          ],
+        })
 
-      const dashboard = await service.getDashboard(actor)
-      expect(dashboard.regulatory.openItems.retentionsDueNotLogged).toEqual([])
+        const dashboard = await service.getDashboard(actor)
+        expect(dashboard.regulatory.openItems.retentionsDueNotLogged).toEqual([])
+      } finally {
+        jest.useRealTimers()
+      }
     })
   })
 
   describe('thisMonthActivity', () => {
-    it('counts dossiers submitted and approvals received this month from the workflow engine\'s own state_change audit trail', async () => {
+    it("counts dossiers submitted and approvals received this month from the workflow engine's own state_change audit trail", async () => {
       const thisMonth = new Date()
-      const lastMonth = new Date(Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 15))
+      const lastMonth = new Date(
+        Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 15),
+      )
       const { service } = buildHarness({
         cases: [],
         deadlines: [],
         signals: [],
         generatedReports: [],
         auditEntries: [
-          { id: 'a1', companyId: 'company-1', recordType: 'reg_registration', action: 'state_change', occurredAt: thisMonth, newValue: { stateKey: 'submitted' } },
-          { id: 'a2', companyId: 'company-1', recordType: 'reg_registration', action: 'state_change', occurredAt: thisMonth, newValue: { stateKey: 'approved' } },
-          { id: 'a3', companyId: 'company-1', recordType: 'reg_registration', action: 'state_change', occurredAt: thisMonth, newValue: { stateKey: 'approved' } },
-          { id: 'a4', companyId: 'company-1', recordType: 'reg_registration', action: 'state_change', occurredAt: lastMonth, newValue: { stateKey: 'submitted' } },
+          {
+            id: 'a1',
+            companyId: 'company-1',
+            recordType: 'reg_registration',
+            action: 'state_change',
+            occurredAt: thisMonth,
+            newValue: { stateKey: 'submitted' },
+          },
+          {
+            id: 'a2',
+            companyId: 'company-1',
+            recordType: 'reg_registration',
+            action: 'state_change',
+            occurredAt: thisMonth,
+            newValue: { stateKey: 'approved' },
+          },
+          {
+            id: 'a3',
+            companyId: 'company-1',
+            recordType: 'reg_registration',
+            action: 'state_change',
+            occurredAt: thisMonth,
+            newValue: { stateKey: 'approved' },
+          },
+          {
+            id: 'a4',
+            companyId: 'company-1',
+            recordType: 'reg_registration',
+            action: 'state_change',
+            occurredAt: lastMonth,
+            newValue: { stateKey: 'submitted' },
+          },
         ],
       })
 
@@ -649,7 +735,9 @@ describe('DashboardService', () => {
 
     it('counts queries logged and retentions certified this month', async () => {
       const thisMonth = new Date()
-      const lastMonth = new Date(Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 15))
+      const lastMonth = new Date(
+        Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 15),
+      )
       const { service } = buildHarness({
         cases: [],
         deadlines: [],

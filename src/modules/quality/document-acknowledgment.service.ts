@@ -37,6 +37,8 @@ function requireCompany(actor: AuthenticatedUser): string {
  * becomes a training-compliance finding (Stage 12's own job), this
  * service only tracks assignment/acknowledgment/overdue-ness honestly.
  */
+export const READER_ASSIGNABLE_STATUSES = ['draft', 'in_review', 'approved', 'effective']
+
 @Injectable()
 export class DocumentAcknowledgmentService {
   constructor(
@@ -55,10 +57,15 @@ export class DocumentAcknowledgmentService {
       const sop = await tx.sop.findFirst({ where: { id: sopId, companyId } })
       if (!sop)
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Controlled document not found' })
-      if (sop.status !== 'effective') {
+      // Pass A: readers can be pre-assigned while the document is still in
+      // review (the rollout on `effective` dedupes on (sop, user, version),
+      // so pre-assigned rows are never duplicated). Acknowledging is still
+      // only possible once the document is effective (see `acknowledge()`).
+      if (!READER_ASSIGNABLE_STATUSES.includes(sop.status)) {
         throw new ConflictException({
-          code: 'NOT_EFFECTIVE',
-          message: 'Readers can only be assigned once a controlled document is effective',
+          code: 'NOT_ASSIGNABLE',
+          message:
+            'Readers can only be assigned while a controlled document is in draft, review, approved or effective',
         })
       }
 
@@ -107,6 +114,15 @@ export class DocumentAcknowledgmentService {
       const sop = await tx.sop.findFirst({ where: { id: sopId, companyId } })
       if (!sop)
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Controlled document not found' })
+      // Pass A: a reader may be pre-assigned while the document is in review,
+      // but the read-and-understand acknowledgment only means something once
+      // the version is actually in force.
+      if (sop.status !== 'effective') {
+        throw new ConflictException({
+          code: 'NOT_EFFECTIVE',
+          message: 'You can acknowledge this document once it is effective',
+        })
+      }
 
       const existing = await tx.documentAcknowledgment.findFirst({
         where: { sopId, userId: actor.sub, versionAcknowledged: sop.currentVersion },

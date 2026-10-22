@@ -2,7 +2,9 @@ import { Processor, WorkerHost } from '@nestjs/bullmq'
 import { Job } from 'bullmq'
 import { Logger } from 'nestjs-pino'
 
+import { DeviationInvestigationReminderService } from './deviation-investigation-reminder.service'
 import { EquipmentQualificationService } from './equipment-qualification.service'
+import { SupplierBiennialReviewReminderService } from './supplier-biennial-review-reminder.service'
 import { SupplierQualificationService } from './supplier-qualification.service'
 
 export const SUPPLIER_REQUALIFICATION_QUEUE = 'supplier-requalification-scan'
@@ -39,6 +41,51 @@ export class CalibrationMaintenanceScanProcessor extends WorkerHost {
 
   async process(_job: Job): Promise<void> {
     const result = await this.equipmentQualificationService.escalateOverdue()
-    this.logger.log({ result }, `Calibration/maintenance scan complete: ${result.flagged} equipment item(s) flagged`)
+    this.logger.log(
+      { result },
+      `Calibration/maintenance scan complete: ${result.flagged} equipment item(s) flagged`,
+    )
+  }
+}
+
+export const DEVIATION_INVESTIGATION_REMINDER_QUEUE = 'deviation-investigation-reminder'
+
+/** QualCloud Phase 1 Pass A2 (item 5b) — the daily investigation-due reminder scan. See `DeviationInvestigationReminderService`. */
+@Processor(DEVIATION_INVESTIGATION_REMINDER_QUEUE)
+export class DeviationInvestigationReminderProcessor extends WorkerHost {
+  constructor(
+    private readonly reminderService: DeviationInvestigationReminderService,
+    private readonly logger: Logger,
+  ) {
+    super()
+  }
+
+  async process(_job: Job): Promise<void> {
+    const result = await this.reminderService.scan()
+    this.logger.log(
+      { result },
+      `Deviation investigation reminder scan complete: ${result.remindersSent} reminder(s) sent`,
+    )
+  }
+}
+
+export const SUPPLIER_BIENNIAL_REVIEW_REMINDER_QUEUE = 'supplier-biennial-review-reminder'
+
+/** QualCloud Phase 1 Pass B (item D3) — the daily biennial supplier-review reminder scan. See `SupplierBiennialReviewReminderService`. */
+@Processor(SUPPLIER_BIENNIAL_REVIEW_REMINDER_QUEUE)
+export class SupplierBiennialReviewReminderProcessor extends WorkerHost {
+  constructor(
+    private readonly reminderService: SupplierBiennialReviewReminderService,
+    private readonly logger: Logger,
+  ) {
+    super()
+  }
+
+  async process(_job: Job): Promise<void> {
+    const result = await this.reminderService.scan()
+    this.logger.log(
+      { result },
+      `Supplier biennial review reminder scan complete: ${result.remindersSent} reminder(s) sent`,
+    )
   }
 }

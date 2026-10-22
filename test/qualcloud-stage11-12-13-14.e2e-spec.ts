@@ -19,6 +19,37 @@ import { testPrisma } from './utils/prisma-test-client'
  * e2e spec's own established convention) since `safemeds_test` stays
  * schema-only.
  */
+/**
+ * QualCloud Phase 1 Pass B — the gates now require uploaded documents (GMP
+ * certificate, review checklist, validation report). Uploads go to R2, which
+ * this Jest harness cannot reach, so these tests seed a real `Document` row
+ * directly, the same bypass the other R2-bound suites use.
+ */
+async function seedBypassDocument(
+  companyId: string,
+  recordType: string,
+  recordId: string,
+): Promise<string> {
+  const id = randomUUID()
+  await testPrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+    await tx.document.create({
+      data: { id, companyId, recordType, recordId, title: 'e2e evidence' },
+    })
+  })
+  return id
+}
+
+async function setSupplierGmpCertificate(supplierId: string, documentId: string): Promise<void> {
+  await testPrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+    await tx.supplier.update({
+      where: { id: supplierId },
+      data: { gmpCertificateDocumentId: documentId },
+    })
+  })
+}
+
 describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equipment Qualification (e2e)', () => {
   let app: INestApplication
   let companyId: string
@@ -106,8 +137,14 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     const qmRoleId = await roleIdFor('QUALITY_MANAGER')
     const qaRoleId = await roleIdFor('QUALITY_ASSOCIATE')
 
-    manager = await createAuthenticatedActor(app, testPrisma, { companyId, roleKeys: ['QUALITY_MANAGER'] })
-    associate = await createAuthenticatedActor(app, testPrisma, { companyId, roleKeys: ['QUALITY_ASSOCIATE'] })
+    manager = await createAuthenticatedActor(app, testPrisma, {
+      companyId,
+      roleKeys: ['QUALITY_MANAGER'],
+    })
+    associate = await createAuthenticatedActor(app, testPrisma, {
+      companyId,
+      roleKeys: ['QUALITY_ASSOCIATE'],
+    })
 
     // ── quality_controlled_document workflow fixture (needed for Stage
     // 12's new-SOP-rollout side effect, which only fires on a real
@@ -115,9 +152,21 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     // QualCloud e2e spec seeds for this record type.
     sopDefinitionId = randomUUID()
     await testPrisma.workflowDefinition.create({
-      data: { id: sopDefinitionId, recordType: 'quality_controlled_document', version: 1, status: 'active' },
+      data: {
+        id: sopDefinitionId,
+        recordType: 'quality_controlled_document',
+        version: 1,
+        status: 'active',
+      },
     })
-    const sopStateKeys = ['draft', 'in_review', 'approved', 'effective', 'superseded', 'retired'] as const
+    const sopStateKeys = [
+      'draft',
+      'in_review',
+      'approved',
+      'effective',
+      'superseded',
+      'retired',
+    ] as const
     for (const key of sopStateKeys) sopStateIds[key] = randomUUID()
     await testPrisma.workflowState.createMany({
       data: sopStateKeys.map((key) => ({
@@ -131,9 +180,30 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     })
     await testPrisma.workflowTransition.createMany({
       data: [
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.draft, toStateId: sopStateIds.in_review, requiredRoleId: qaRoleId, requiresSignature: false },
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.in_review, toStateId: sopStateIds.approved, requiredRoleId: qmRoleId, requiresSignature: true },
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.approved, toStateId: sopStateIds.effective, requiredRoleId: qmRoleId, requiresSignature: false },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.draft,
+          toStateId: sopStateIds.in_review,
+          requiredRoleId: qaRoleId,
+          requiresSignature: false,
+        },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.in_review,
+          toStateId: sopStateIds.approved,
+          requiredRoleId: qmRoleId,
+          requiresSignature: true,
+        },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.approved,
+          toStateId: sopStateIds.effective,
+          requiredRoleId: qmRoleId,
+          requiresSignature: false,
+        },
       ],
     })
   })
@@ -147,7 +217,10 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
   describe('Stage 11 — Supplier & Material Qualification', () => {
     async function createSupplier(criticality = 'critical'): Promise<string> {
-      const res = await authedWrite(request(httpServer(app)).post('/api/v1/quality/suppliers'), manager)
+      const res = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/suppliers'),
+        manager,
+      )
         .send({ name: 'Acme API Supplier', supplierType: 'api_supplier', criticality })
         .expect(201)
       return res.body.data.id as string
@@ -156,7 +229,9 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     it('assesses a supplier via a structured weighted questionnaire and computes a real score', async () => {
       const supplierId = await createSupplier()
       const res = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/supplier-qualification/${supplierId}/assess`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/supplier-qualification/${supplierId}/assess`,
+        ),
         manager,
       )
         .send({
@@ -170,7 +245,9 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       expect(res.body.data.overallScore).toBe(87)
 
       const list = await authed(
-        request(httpServer(app)).get(`/api/v1/quality/supplier-qualification/${supplierId}/questionnaires`),
+        request(httpServer(app)).get(
+          `/api/v1/quality/supplier-qualification/${supplierId}/questionnaires`,
+        ),
         manager,
       ).expect(200)
       expect(list.body.data).toHaveLength(1)
@@ -179,7 +256,9 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     it('schedules a real supplier-scope internal audit', async () => {
       const supplierId = await createSupplier()
       const res = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/supplier-qualification/${supplierId}/schedule-audit`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/supplier-qualification/${supplierId}/schedule-audit`,
+        ),
         manager,
       )
         .send({ scheduledDate: '2027-03-01' })
@@ -190,8 +269,14 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
     it('approve() sets approvalStatus and computes a live re-qualification due date, and the Approved Supplier List reflects it', async () => {
       const supplierId = await createSupplier('critical')
+      await setSupplierGmpCertificate(
+        supplierId,
+        await seedBypassDocument(companyId, 'supplier', supplierId),
+      )
       const approved = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/supplier-qualification/${supplierId}/approve`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/supplier-qualification/${supplierId}/approve`,
+        ),
         manager,
       )
         .send({ approvalStatus: 'approved' })
@@ -206,20 +291,26 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       expect((list.body.data as { id: string }[]).some((s) => s.id === supplierId)).toBe(true)
     })
 
-    it('monitor() appends a performance flag', async () => {
+    it('monitor() appends a performance flag and records a review with its checklist', async () => {
       const supplierId = await createSupplier()
+      const checklistDocumentId = await seedBypassDocument(companyId, 'supplier', supplierId)
       const res = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/supplier-qualification/${supplierId}/monitor`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/supplier-qualification/${supplierId}/monitor`,
+        ),
         associate,
       )
-        .send({ flag: 'Late delivery on PO-1042' })
+        .send({ flag: 'Late delivery on PO-1042', checklistDocumentId })
         .expect(201)
       expect((res.body.data.performanceFlags as string[])[0]).toContain('Late delivery')
     })
 
-    it('a CoA is scored against a material specification\'s own parameters and quarantined on any out-of-limit result', async () => {
+    it("a CoA is scored against a material specification's own parameters and quarantined on any out-of-limit result", async () => {
       const supplierId = await createSupplier()
-      const spec = await authedWrite(request(httpServer(app)).post('/api/v1/quality/specifications'), manager)
+      const spec = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/specifications'),
+        manager,
+      )
         .send({
           specificationNumber: 'SPEC-RM-001',
           title: 'Lactose Monohydrate',
@@ -228,10 +319,16 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
         })
         .expect(201)
       const specId = spec.body.data.id as string
-      const specDetail = await authed(request(httpServer(app)).get(`/api/v1/quality/specifications/${specId}`), manager).expect(200)
+      const specDetail = await authed(
+        request(httpServer(app)).get(`/api/v1/quality/specifications/${specId}`),
+        manager,
+      ).expect(200)
       const parameterId = specDetail.body.data.parameters[0].id as string
 
-      const coa = await authedWrite(request(httpServer(app)).post('/api/v1/quality/certificates-of-analysis'), manager)
+      const coa = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/certificates-of-analysis'),
+        manager,
+      )
         .send({
           supplierId,
           materialSpecificationId: specId,
@@ -242,7 +339,9 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       expect(coa.body.data.disposition).toBe('quarantined')
 
       const reviewed = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/certificates-of-analysis/${coa.body.data.id}/review`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/certificates-of-analysis/${coa.body.data.id}/review`,
+        ),
         manager,
       )
         .send({ disposition: 'rejected' })
@@ -257,7 +356,13 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
   describe('Stage 12 — Training & Competency Management', () => {
     it('reports "missing" then a real valid status as a training record is logged against a curriculum item', async () => {
       const trainingType = await testPrisma.trainingTypeCatalogEntry.create({
-        data: { id: newId(), typeKey: 'gmp_fundamentals', label: 'GMP Fundamentals', sortOrder: 1, active: true },
+        data: {
+          id: newId(),
+          typeKey: 'gmp_fundamentals',
+          label: 'GMP Fundamentals',
+          sortOrder: 1,
+          active: true,
+        },
       })
 
       await authedWrite(request(httpServer(app)).post('/api/v1/training/curriculum'), manager)
@@ -272,7 +377,10 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
       const expiry = new Date()
       expiry.setFullYear(expiry.getFullYear() + 1)
-      const record = await authedWrite(request(httpServer(app)).post('/api/v1/training-records'), manager)
+      const record = await authedWrite(
+        request(httpServer(app)).post('/api/v1/training-records'),
+        manager,
+      )
         .send({
           userId: associate.userId,
           trainingType: 'gmp_fundamentals',
@@ -293,35 +401,61 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
         request(httpServer(app)).post('/api/v1/training/competency-assessments'),
         manager,
       )
-        .send({ trainingRecordId: record.body.data.id, assessmentMethod: 'written_test', result: 'competent' })
+        .send({
+          trainingRecordId: record.body.data.id,
+          assessmentMethod: 'written_test',
+          result: 'competent',
+        })
         .expect(201)
       expect(assessment.body.data.result).toBe('competent')
     })
 
     it('a new-SOP going effective auto-creates a real DocumentAcknowledgment for every active user holding a curriculum-mapped role', async () => {
       const trainingType = await testPrisma.trainingTypeCatalogEntry.create({
-        data: { id: newId(), typeKey: 'deviation_handling_sop', label: 'Deviation Handling SOP Training', sortOrder: 1, active: true },
+        data: {
+          id: newId(),
+          typeKey: 'deviation_handling_sop',
+          label: 'Deviation Handling SOP Training',
+          sortOrder: 1,
+          active: true,
+        },
       })
       await authedWrite(request(httpServer(app)).post('/api/v1/training/curriculum'), manager)
-        .send({ roleKey: 'QUALITY_ASSOCIATE', trainingTypeId: trainingType.id, documentTypeTrigger: 'sop' })
+        .send({
+          roleKey: 'QUALITY_ASSOCIATE',
+          trainingTypeId: trainingType.id,
+          documentTypeTrigger: 'sop',
+        })
         .expect(201)
 
-      const created = await authedWrite(request(httpServer(app)).post('/api/v1/quality/sops'), associate)
-        .send({ documentNumber: 'SOP-QA-010', title: 'Deviation Handling', documentType: 'sop' })
+      const created = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/sops'),
+        associate,
+      )
+        .send({ title: 'Deviation Handling', documentType: 'sop' })
         .expect(201)
       const sopId = created.body.data.id as string
       const instance = await testPrisma.workflowInstance.findFirstOrThrow({
         where: { recordType: 'quality_controlled_document', recordId: sopId },
       })
 
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), associate)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        associate,
+      )
         .send({ toStateKey: 'in_review' })
         .expect(201)
       const approveToken = await signatureTokenFor(manager)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), manager)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        manager,
+      )
         .send({ toStateKey: 'approved', signatureToken: approveToken, intentStatement: 'Approved' })
         .expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), manager)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        manager,
+      )
         .send({ toStateKey: 'effective' })
         .expect(201)
 
@@ -334,8 +468,12 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       const { ack, managerAck } = await testPrisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
         return {
-          ack: await tx.documentAcknowledgment.findFirst({ where: { sopId, userId: associate.userId } }),
-          managerAck: await tx.documentAcknowledgment.findFirst({ where: { sopId, userId: manager.userId } }),
+          ack: await tx.documentAcknowledgment.findFirst({
+            where: { sopId, userId: associate.userId },
+          }),
+          managerAck: await tx.documentAcknowledgment.findFirst({
+            where: { sopId, userId: manager.userId },
+          }),
         }
       })
       expect(ack).not.toBeNull()
@@ -376,7 +514,10 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
     it.skip('assembles a live cross-module snapshot, reviews it with a real e-signature, and archives a generated PDF', async () => {
       const productId = await createProduct()
 
-      const assembled = await authedWrite(request(httpServer(app)).post('/api/v1/quality/pqr/assemble'), associate)
+      const assembled = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/pqr/assemble'),
+        associate,
+      )
         .send({ productId, periodStart: '2027-01-01', periodEnd: '2027-12-31' })
         .expect(201)
       expect(assembled.body.data.status).toBe('draft')
@@ -384,12 +525,21 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
       const pqrId = assembled.body.data.id as string
       const token = await signatureTokenFor(manager)
-      const reviewed = await authedWrite(request(httpServer(app)).post(`/api/v1/quality/pqr/${pqrId}/review`), manager)
+      const reviewed = await authedWrite(
+        request(httpServer(app)).post(`/api/v1/quality/pqr/${pqrId}/review`),
+        manager,
+      )
         .send({
           intentStatement: 'I attest this Product Quality Review is accurate and complete',
           signatureToken: token,
           conclusionsNarrative: 'No significant quality issues identified for this period.',
-          recommendedActions: [{ description: 'Review supplier audit cadence', openCapa: true, rootCauseCategory: 'supplier' }],
+          recommendedActions: [
+            {
+              description: 'Review supplier audit cadence',
+              openCapa: true,
+              rootCauseCategory: 'supplier',
+            },
+          ],
         })
         .expect(201)
       expect(reviewed.body.data.status).toBe('reviewed')
@@ -401,12 +551,17 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       expect(report.reportTypeKey).toBe('pqr')
       expect(report.status).toBe('final')
 
-      const capas = await testPrisma.capa.findMany({ where: { companyId, sourceRecordType: 'pqr_action', sourceRecordId: pqrId } })
+      const capas = await testPrisma.capa.findMany({
+        where: { companyId, sourceRecordType: 'pqr_action', sourceRecordId: pqrId },
+      })
       expect(capas).toHaveLength(1)
       expect(capas[0].rootCauseCategory).toBe('supplier')
 
       // A re-review is blocked.
-      await authedWrite(request(httpServer(app)).post(`/api/v1/quality/pqr/${pqrId}/review`), manager)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/quality/pqr/${pqrId}/review`),
+        manager,
+      )
         .send({ intentStatement: 'again', signatureToken: await signatureTokenFor(manager) })
         .expect(409)
     })
@@ -416,7 +571,10 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
   describe('Stage 14 — Equipment Qualification, Calibration, Maintenance', () => {
     async function createEquipment(): Promise<string> {
-      const res = await authedWrite(request(httpServer(app)).post('/api/v1/quality/equipment'), manager)
+      const res = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/equipment'),
+        manager,
+      )
         .send({ name: 'Analytical Balance #3', equipmentType: 'balance' })
         .expect(201)
       return res.body.data.id as string
@@ -424,49 +582,71 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
 
     it('records DQ/IQ/OQ/PQ as four separate dated events and advances the live qualificationStatus only on each pass', async () => {
       const equipmentId = await createEquipment()
+      const reportId = await seedBypassDocument(companyId, 'equipment', equipmentId)
 
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       )
-        .send({ stage: 'dq', result: 'pass' })
+        .send({ stage: 'dq', result: 'pass', reportDocumentId: reportId })
         .expect(201)
-      let eq = await authed(request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`), manager).expect(200)
+      let eq = await authed(
+        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`),
+        manager,
+      ).expect(200)
       expect(eq.body.data.qualificationStatus).toBe('dq_complete')
 
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       )
         .send({ stage: 'iq', result: 'fail', notes: 'Installation incomplete' })
         .expect(201)
-      eq = await authed(request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`), manager).expect(200)
+      eq = await authed(
+        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`),
+        manager,
+      ).expect(200)
       // A failed step must not silently advance the summary status.
       expect(eq.body.data.qualificationStatus).toBe('dq_complete')
 
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       )
-        .send({ stage: 'iq', result: 'pass' })
+        .send({ stage: 'iq', result: 'pass', reportDocumentId: reportId })
         .expect(201)
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       )
-        .send({ stage: 'oq', result: 'pass' })
+        .send({ stage: 'oq', result: 'pass', reportDocumentId: reportId })
         .expect(201)
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       )
-        .send({ stage: 'pq', result: 'pass' })
+        .send({ stage: 'pq', result: 'pass', reportDocumentId: reportId })
         .expect(201)
-      eq = await authed(request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`), manager).expect(200)
+      eq = await authed(
+        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`),
+        manager,
+      ).expect(200)
       expect(eq.body.data.qualificationStatus).toBe('qualified')
 
       const events = await authed(
-        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}/qualification-events`),
+        request(httpServer(app)).get(
+          `/api/v1/quality/equipment/${equipmentId}/qualification-events`,
+        ),
         manager,
       ).expect(200)
       expect(events.body.data).toHaveLength(5)
@@ -478,7 +658,9 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
       nextDue.setMonth(nextDue.getMonth() + 6)
 
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/equipment/${equipmentId}/maintenance-records`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/equipment/${equipmentId}/maintenance-records`,
+        ),
         associate,
       )
         .send({
@@ -488,12 +670,19 @@ describe('QualCloud Stages 11-14 — Supplier Qualification, Training, PQR, Equi
         })
         .expect(201)
 
-      const eq = await authed(request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`), manager).expect(200)
+      const eq = await authed(
+        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}`),
+        manager,
+      ).expect(200)
       const maintenanceDueAt = eq.body.data.maintenanceDueAt as string
-      expect(new Date(maintenanceDueAt).toISOString().slice(0, 10)).toBe(nextDue.toISOString().slice(0, 10))
+      expect(new Date(maintenanceDueAt).toISOString().slice(0, 10)).toBe(
+        nextDue.toISOString().slice(0, 10),
+      )
 
       const records = await authed(
-        request(httpServer(app)).get(`/api/v1/quality/equipment/${equipmentId}/maintenance-records`),
+        request(httpServer(app)).get(
+          `/api/v1/quality/equipment/${equipmentId}/maintenance-records`,
+        ),
         manager,
       ).expect(200)
       expect(records.body.data).toHaveLength(1)

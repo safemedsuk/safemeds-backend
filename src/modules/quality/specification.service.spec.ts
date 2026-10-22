@@ -125,7 +125,17 @@ function buildHarness() {
       }),
   }
 
-  const tables = { specification, specificationParameter }
+  const product = {
+    findFirst: jest
+      .fn()
+      .mockImplementation(({ where }: { where: { id: string; companyId: string } }) =>
+        Promise.resolve(
+          where.id === PRODUCT_ID && where.companyId === 'company-1' ? { id: PRODUCT_ID } : null,
+        ),
+      ),
+  }
+
+  const tables = { specification, specificationParameter, product }
   const rls = {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
   }
@@ -135,6 +145,8 @@ function buildHarness() {
   const service = new SpecificationService(rls as never, auditService)
   return { service, specRows, paramRows, auditLog }
 }
+
+const PRODUCT_ID = '00000000-0000-4000-8000-00000000000a'
 
 describe('SpecificationService', () => {
   it('rejects a platform actor with no company', async () => {
@@ -146,6 +158,7 @@ describe('SpecificationService', () => {
           specificationNumber: 'SPEC-001',
           title: 'Paracetamol 500mg',
           specificationType: 'finished_product',
+          productId: PRODUCT_ID,
         },
         {},
       ),
@@ -160,6 +173,7 @@ describe('SpecificationService', () => {
         specificationNumber: 'SPEC-001',
         title: 'Paracetamol 500mg',
         specificationType: 'finished_product',
+        productId: PRODUCT_ID,
         parameters: [
           {
             parameterName: 'Assay',
@@ -182,7 +196,12 @@ describe('SpecificationService', () => {
     const { service } = buildHarness()
     await service.create(
       actor,
-      { specificationNumber: 'SPEC-001', title: 'x', specificationType: 'finished_product' },
+      {
+        specificationNumber: 'SPEC-001',
+        title: 'x',
+        specificationType: 'finished_product',
+        productId: PRODUCT_ID,
+      },
       {},
     )
     await expect(
@@ -209,6 +228,7 @@ describe('SpecificationService', () => {
         specificationNumber: 'SPEC-001',
         title: 'x',
         specificationType: 'finished_product',
+        productId: PRODUCT_ID,
         parameters: [{ parameterName: 'Assay' }],
       },
       {},
@@ -227,12 +247,55 @@ describe('SpecificationService', () => {
     const { service, specRows } = buildHarness()
     const created = await service.create(
       actor,
-      { specificationNumber: 'SPEC-001', title: 'x', specificationType: 'finished_product' },
+      {
+        specificationNumber: 'SPEC-001',
+        title: 'x',
+        specificationType: 'finished_product',
+        productId: PRODUCT_ID,
+      },
       {},
     )
     specRows.set(created.id, { ...specRows.get(created.id)!, status: 'effective' })
     await expect(service.update(actor, created.id, { title: 'y' }, {})).rejects.toThrow(
       ConflictException,
     )
+  })
+
+  // Phase 2 Pass C — product-linked specifications.
+  it('refuses a finished-product specification with no product linked', async () => {
+    const { service } = buildHarness()
+    await expect(
+      service.create(
+        actor,
+        { specificationNumber: 'SPEC-010', title: 'x', specificationType: 'finished_product' },
+        {},
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_REQUIRED' } })
+  })
+
+  it('refuses a product that is not in this company catalogue', async () => {
+    const { service } = buildHarness()
+    await expect(
+      service.create(
+        actor,
+        {
+          specificationNumber: 'SPEC-011',
+          title: 'x',
+          specificationType: 'finished_product',
+          productId: '00000000-0000-4000-8000-0000000000ff',
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_NOT_FOUND' } })
+  })
+
+  it('a raw-material specification may stay unlinked (it links to a supplier instead)', async () => {
+    const { service } = buildHarness()
+    const created = await service.create(
+      actor,
+      { specificationNumber: 'SPEC-012', title: 'Lactose', specificationType: 'raw_material' },
+      {},
+    )
+    expect(created.productId).toBeNull()
   })
 })

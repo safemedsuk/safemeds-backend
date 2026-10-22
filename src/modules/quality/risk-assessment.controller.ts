@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common'
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  StreamableFile,
+} from '@nestjs/common'
 import { ApiTags } from '@nestjs/swagger'
 import type { Request } from 'express'
 
@@ -10,6 +21,8 @@ import { ListRiskAssessmentsQueryDto } from './dto/list-risk-assessments-query.d
 import { UpdateRiskAssessmentDto } from './dto/update-risk-assessment.dto'
 import { RiskAssessmentService } from './risk-assessment.service'
 
+/** Declared before `:id` so the literal path is never captured as an id. */
+
 @ApiTags('quality-risk-assessments')
 @Controller('quality/risk-assessments')
 export class RiskAssessmentController {
@@ -19,6 +32,29 @@ export class RiskAssessmentController {
   @Get()
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListRiskAssessmentsQueryDto) {
     return this.riskAssessmentService.list(user, query)
+  }
+
+  /** Full register as Excel (`?format=xlsx`, default) or CSV (`?format=csv`). Audited. */
+  @RequirePermissions('quality.view_all')
+  @Get('export')
+  async export(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('format') format: string | undefined,
+    @Req() req: Request,
+  ) {
+    const fmt = format ?? 'xlsx'
+    if (fmt !== 'xlsx' && fmt !== 'csv') {
+      throw new BadRequestException({
+        code: 'FORMAT_INVALID',
+        message: 'format must be xlsx or csv',
+      })
+    }
+    const result = await this.riskAssessmentService.exportRegister(user, fmt, { ip: req.ip })
+    return new StreamableFile(result.buffer, {
+      type: result.contentType,
+      disposition: `attachment; filename="${result.filename}"`,
+      length: result.buffer.length,
+    })
   }
 
   @RequirePermissions('quality.view_all')

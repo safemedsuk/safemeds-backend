@@ -10,7 +10,8 @@ import {
   DEVIATION_INVESTIGATION_DUE_DAYS,
   QUALITY_DEVIATION_RECORD_TYPE,
 } from './deviation.service'
-import { QUALITY_OOS_RECORD_TYPE } from './oos.service'
+import { investigationDocumentRecordType } from './deviation.service'
+import { OOS_MANUFACTURING_REPORT_RECORD_TYPE, QUALITY_OOS_RECORD_TYPE } from './oos.service'
 import { QUALITY_CONTROLLED_DOCUMENT_RECORD_TYPE } from './sop.service'
 
 const OPEN_CAPA_STATUSES = ['open', 'in_progress', 'pending_effectiveness_check'] as const
@@ -156,6 +157,8 @@ export class QualityWorkflowGuards implements OnModuleInit {
                     deviation.detectedAt.getTime() +
                       DEVIATION_INVESTIGATION_DUE_DAYS[severity] * 24 * 60 * 60 * 1000,
                   ),
+                  // Pass A2 — a recomputed due date starts its reminder cycle again.
+                  investigationReminderStage: null,
                 }
               : {}),
             ...(toStateKey === 'closed' ? { closedAt: new Date() } : {}),
@@ -240,6 +243,33 @@ export class QualityWorkflowGuards implements OnModuleInit {
             allowed: false,
             reason:
               'The investigation reviewer cannot be the same person who performed the investigation.',
+          }
+        }
+        return { allowed: true }
+      },
+    )
+
+    // Pass A2 (item 4c) — the investigation report is a required, attached
+    // document before the investigation can be completed. Mirrors the OOS
+    // Phase-2 requirement below; the report is a separate document type from
+    // the evidence the investigation accumulates along the way.
+    this.guardRegistry.register(
+      QUALITY_DEVIATION_RECORD_TYPE,
+      'investigating',
+      async ({ tx, companyId, recordId, toStateKey }) => {
+        if (toStateKey !== 'capa_pending') return { allowed: true }
+        const reports = await tx.document.count({
+          where: {
+            companyId,
+            recordType: investigationDocumentRecordType('report'),
+            recordId,
+          },
+        })
+        if (reports === 0) {
+          return {
+            allowed: false,
+            reason:
+              'Attach the investigation report document before completing this investigation.',
           }
         }
         return { allowed: true }
@@ -333,7 +363,10 @@ export class QualityWorkflowGuards implements OnModuleInit {
       async ({ tx, recordId, toStateKey }) => {
         if (toStateKey !== 'closed') return { allowed: true }
         const changeControl = await tx.changeControl.findUnique({ where: { id: recordId } })
-        if (!changeControl?.verificationResult || changeControl.verificationResult.trim().length === 0) {
+        if (
+          !changeControl?.verificationResult ||
+          changeControl.verificationResult.trim().length === 0
+        ) {
           return {
             allowed: false,
             reason:
@@ -363,10 +396,32 @@ export class QualityWorkflowGuards implements OnModuleInit {
           data: {
             status: toStateKey,
             investigationPhase: toStateKey === 'closed' ? undefined : toStateKey,
-            ...(toStateKey === 'phase_2_manufacturing_investigation' ? { phase2Triggered: true } : {}),
+            ...(toStateKey === 'phase_2_manufacturing_investigation'
+              ? { phase2Triggered: true }
+              : {}),
             ...(toStateKey === 'closed' ? { closedAt: new Date() } : {}),
           },
         })
+      },
+    )
+
+    // Pass A2 (item 4c) — a manufacturing (Phase 2) investigation cannot be
+    // completed without its attached investigation report document.
+    this.guardRegistry.register(
+      QUALITY_OOS_RECORD_TYPE,
+      'phase_2_manufacturing_investigation',
+      async ({ tx, companyId, recordId }) => {
+        const reports = await tx.document.count({
+          where: { companyId, recordType: OOS_MANUFACTURING_REPORT_RECORD_TYPE, recordId },
+        })
+        if (reports === 0) {
+          return {
+            allowed: false,
+            reason:
+              'Attach the manufacturing investigation report document before completing this investigation.',
+          }
+        }
+        return { allowed: true }
       },
     )
 

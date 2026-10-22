@@ -474,7 +474,8 @@ async function seedRecallRules(): Promise<void> {
 
   for (const ruleSetSeed of RECALL_RULE_SETS) {
     const country = await prisma.country.findUnique({ where: { isoCode: ruleSetSeed.countryIso } })
-    if (!country) throw new Error(`Unknown country ISO "${ruleSetSeed.countryIso}" in RECALL_RULE_SETS seed`)
+    if (!country)
+      throw new Error(`Unknown country ISO "${ruleSetSeed.countryIso}" in RECALL_RULE_SETS seed`)
     const authority = await prisma.regulatoryAuthority.findUnique({
       where: { countryId_code: { countryId: country.id, code: ruleSetSeed.authorityCode } },
     })
@@ -962,12 +963,16 @@ async function seedInspectionChecklist(): Promise<void> {
         mappedRecordType: section.mappedRecordType,
         sortOrder: section.sortOrder,
         guidelineReference: section.guidelineReference ?? null,
+        unverified: false,
       },
       update: {
         title: section.title,
         description: section.description,
         mappedRecordType: section.mappedRecordType,
         sortOrder: section.sortOrder,
+        // Pass A: these eight sections are the build-spec outline, not a
+        // placeholder awaiting confirmation — seed owns this content.
+        unverified: false,
         ...(section.guidelineReference !== undefined
           ? { guidelineReference: section.guidelineReference }
           : {}),
@@ -1261,10 +1266,26 @@ async function seedRegCloudFoundation(): Promise<void> {
     name: string
     ctdModule: string | null
   }[] = [
-    { documentKey: 'ct_cover_letter', name: 'Cover Letter (addressed to the PPB Registrar)', ctdModule: 'Module 1' },
-    { documentKey: 'ct_application_form', name: 'Completed Clinical Trial Application Form', ctdModule: 'Module 1' },
-    { documentKey: 'ct_study_protocol', name: "Study Protocol (with versions/dates/amendments)", ctdModule: 'Module 1' },
-    { documentKey: 'ct_investigators_brochure', name: "Investigator's Brochure (IB)", ctdModule: 'Module 1' },
+    {
+      documentKey: 'ct_cover_letter',
+      name: 'Cover Letter (addressed to the PPB Registrar)',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_application_form',
+      name: 'Completed Clinical Trial Application Form',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_study_protocol',
+      name: 'Study Protocol (with versions/dates/amendments)',
+      ctdModule: 'Module 1',
+    },
+    {
+      documentKey: 'ct_investigators_brochure',
+      name: "Investigator's Brochure (IB)",
+      ctdModule: 'Module 1',
+    },
     {
       documentKey: 'ct_cmc_impd',
       name: 'Product Quality/Manufacturing (CMC) Documentation / IMPD',
@@ -1290,11 +1311,18 @@ async function seedRegCloudFoundation(): Promise<void> {
       name: 'Administrative and Legal Documents (trial insurance, institutional affiliation letters, grant/funding letters, MTAs if applicable)',
       ctdModule: 'Module 1',
     },
-    { documentKey: 'ct_fee_payment_evidence', name: 'Evidence of Fee Payment', ctdModule: 'Module 1' },
+    {
+      documentKey: 'ct_fee_payment_evidence',
+      name: 'Evidence of Fee Payment',
+      ctdModule: 'Module 1',
+    },
   ]
 
   for (const [index, doc] of clinicalTrialDocuments.entries()) {
-    const docKey = { regulatoryRequirementId: clinicalTrialRequirement.id, documentKey: doc.documentKey }
+    const docKey = {
+      regulatoryRequirementId: clinicalTrialRequirement.id,
+      documentKey: doc.documentKey,
+    }
     const docData = {
       name: doc.name,
       ctdModule: doc.ctdModule,
@@ -1305,9 +1333,14 @@ async function seedRegCloudFoundation(): Promise<void> {
     }
     const existingDoc = await prisma.requiredDocumentDefinition.findFirst({ where: docKey })
     if (existingDoc) {
-      await prisma.requiredDocumentDefinition.update({ where: { id: existingDoc.id }, data: docData })
+      await prisma.requiredDocumentDefinition.update({
+        where: { id: existingDoc.id },
+        data: docData,
+      })
     } else {
-      await prisma.requiredDocumentDefinition.create({ data: { id: newId(), ...docKey, ...docData } })
+      await prisma.requiredDocumentDefinition.create({
+        data: { id: newId(), ...docKey, ...docData },
+      })
     }
   }
 

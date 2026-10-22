@@ -1,5 +1,10 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma, RecallCascadeInvite, RecallDistributionRecord, RecallImportJob } from '@prisma/client'
+import {
+  Prisma,
+  RecallCascadeInvite,
+  RecallDistributionRecord,
+  RecallImportJob,
+} from '@prisma/client'
 
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
@@ -68,7 +73,12 @@ export class RecallDistributionService {
       if (!recall) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Recall not found' })
 
       const toOrg = await tx.stakeholder.findFirst({ where: { id: dto.toOrgId, companyId } })
-      if (!toOrg) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Recipient stakeholder not found' })
+      if (!toOrg)
+        throw new NotFoundException({
+          code: 'STAKEHOLDER_NOT_FOUND',
+          message:
+            'That recipient is not one of your stakeholders. Choose one from the stakeholder list, or create it first.',
+        })
 
       // Real-world stock splits/repacks happen — a downstream quantity
       // exceeding what the parent stakeholder itself received is a
@@ -143,12 +153,16 @@ export class RecallDistributionService {
         orderBy: { version: 'desc' },
       })
       const scopedBatchByNumber = new Map(
-        (frozenScope?.items ?? []).map((item) => [item.batch.batchNumber.toLowerCase(), item.batchId]),
+        (frozenScope?.items ?? []).map((item) => [
+          item.batch.batchNumber.toLowerCase(),
+          item.batchId,
+        ]),
       )
 
       const rows = parseCsv(csvText)
       const [header, ...dataRows] = rows
-      const colIndex = (name: string) => header?.findIndex((h) => h.trim().toLowerCase() === name) ?? -1
+      const colIndex = (name: string) =>
+        header?.findIndex((h) => h.trim().toLowerCase() === name) ?? -1
       const iOrg = colIndex('toorgname')
       const iBatch = colIndex('batchnumber')
       const iQtyUnits = colIndex('qtyunits')
@@ -175,7 +189,10 @@ export class RecallDistributionService {
           continue
         }
         if (!batchNumber || !scopedBatchByNumber.has(batchNumber.toLowerCase())) {
-          errors.push({ row: rowNum, message: `Batch "${batchNumber ?? ''}" is not in this recall's frozen scope` })
+          errors.push({
+            row: rowNum,
+            message: `Batch "${batchNumber ?? ''}" is not in this recall's frozen scope`,
+          })
           continue
         }
         if (!Number.isFinite(qtyUnits) || qtyUnits < 0) {
@@ -184,7 +201,10 @@ export class RecallDistributionService {
         }
         const dedupeKey = `${orgName.toLowerCase()}|${batchNumber.toLowerCase()}|${invoiceNo ?? ''}`
         if (seenKeys.has(dedupeKey)) {
-          errors.push({ row: rowNum, message: 'Duplicate row (same recipient/batch/invoice already imported)' })
+          errors.push({
+            row: rowNum,
+            message: 'Duplicate row (same recipient/batch/invoice already imported)',
+          })
           continue
         }
         seenKeys.add(dedupeKey)
@@ -210,7 +230,14 @@ export class RecallDistributionService {
           validRows,
           errorRows: errors.length,
           status: errors.length > 0 ? 'completed_with_errors' : 'completed',
-          mapping: { toOrgName: iOrg, batchNumber: iBatch, qtyUnits: iQtyUnits, qtyPacks: iQtyPacks, date: iDate, invoiceNo: iInvoice },
+          mapping: {
+            toOrgName: iOrg,
+            batchNumber: iBatch,
+            qtyUnits: iQtyUnits,
+            qtyPacks: iQtyPacks,
+            date: iDate,
+            invoiceNo: iInvoice,
+          },
           errors: errors.length > 0 ? (errors as unknown as Prisma.InputJsonValue) : undefined,
           createdBy: actor.sub,
         },
@@ -226,7 +253,8 @@ export class RecallDistributionService {
         const orgName = iOrg >= 0 ? row[iOrg]?.trim() : undefined
         const batchNumber = iBatch >= 0 ? row[iBatch]?.trim() : undefined
         const qtyUnits = iQtyUnits >= 0 ? Number(row[iQtyUnits]) : NaN
-        if (!orgName || !batchNumber || !scopedBatchByNumber.has(batchNumber.toLowerCase())) continue
+        if (!orgName || !batchNumber || !scopedBatchByNumber.has(batchNumber.toLowerCase()))
+          continue
         if (!Number.isFinite(qtyUnits) || qtyUnits < 0) continue
 
         const toOrg = await tx.stakeholder.findFirst({
@@ -247,7 +275,8 @@ export class RecallDistributionService {
             batchId: scopedBatchByNumber.get(batchNumber.toLowerCase())!,
             toOrgId: toOrg.id,
             qtyUnits: Math.trunc(qtyUnits),
-            qtyPacks: qtyPacks !== undefined && Number.isFinite(qtyPacks) ? Math.trunc(qtyPacks) : null,
+            qtyPacks:
+              qtyPacks !== undefined && Number.isFinite(qtyPacks) ? Math.trunc(qtyPacks) : null,
             date: Number.isFinite(parsedDate.getTime()) ? parsedDate : new Date(),
             source: 'import',
             sourceRef: invoiceNo ?? null,
@@ -273,7 +302,10 @@ export class RecallDistributionService {
   async listImportJobs(actor: AuthenticatedUser, recallId: string): Promise<RecallImportJob[]> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, (tx) =>
-      tx.recallImportJob.findMany({ where: { companyId, recallId }, orderBy: { createdAt: 'desc' } }),
+      tx.recallImportJob.findMany({
+        where: { companyId, recallId },
+        orderBy: { createdAt: 'desc' },
+      }),
     )
   }
 
@@ -285,8 +317,15 @@ export class RecallDistributionService {
   ): Promise<RecallCascadeInvite> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
-      const stakeholder = await tx.stakeholder.findFirst({ where: { id: stakeholderId, companyId } })
-      if (!stakeholder) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Stakeholder not found' })
+      const stakeholder = await tx.stakeholder.findFirst({
+        where: { id: stakeholderId, companyId },
+      })
+      if (!stakeholder)
+        throw new NotFoundException({
+          code: 'STAKEHOLDER_NOT_FOUND',
+          message:
+            'That stakeholder is not in your stakeholder list. Pick one from the list, or create it first.',
+        })
 
       const existing = await tx.recallCascadeInvite.findUnique({
         where: { recallId_stakeholderId: { recallId, stakeholderId } },
@@ -309,10 +348,16 @@ export class RecallDistributionService {
     })
   }
 
-  async listCascadeInvites(actor: AuthenticatedUser, recallId: string): Promise<RecallCascadeInvite[]> {
+  async listCascadeInvites(
+    actor: AuthenticatedUser,
+    recallId: string,
+  ): Promise<RecallCascadeInvite[]> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, (tx) =>
-      tx.recallCascadeInvite.findMany({ where: { companyId, recallId }, orderBy: { invitedAt: 'desc' } }),
+      tx.recallCascadeInvite.findMany({
+        where: { companyId, recallId },
+        orderBy: { invitedAt: 'desc' },
+      }),
     )
   }
 }

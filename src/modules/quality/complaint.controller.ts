@@ -1,10 +1,24 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseFilePipeBuilder,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
 import { ApiTags } from '@nestjs/swagger'
 import type { Request } from 'express'
+import { memoryStorage } from 'multer'
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { MAX_UPLOAD_BYTES } from '../../common/upload-limits.const'
 import { ComplaintService } from './complaint.service'
 import { ClassifyComplaintDto } from './dto/classify-complaint.dto'
 import { CreateComplaintDto } from './dto/create-complaint.dto'
@@ -76,5 +90,28 @@ export class ComplaintController {
     @Req() req: Request,
   ) {
     return this.complaintService.openCapaForComplaint(user, id, dto, { ip: req.ip })
+  }
+
+  /** Pass A2 (item 4d) — a substantiating document; resolving the complaint requires at least one. */
+  @RequirePermissions('quality.log_deviation')
+  @Post(':id/substantiation')
+  @UseInterceptors(
+    FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } }),
+  )
+  uploadSubstantiation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @UploadedFile(
+      new ParseFilePipeBuilder().build({ fileIsRequired: true, errorHttpStatusCode: 400 }),
+    )
+    file: Express.Multer.File,
+    @Req() req: Request,
+  ) {
+    return this.complaintService.uploadSubstantiation(
+      user,
+      id,
+      { buffer: file.buffer, originalname: file.originalname, mimetype: file.mimetype },
+      { ip: req.ip },
+    )
   }
 }

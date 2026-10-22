@@ -12,6 +12,11 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { paginate, PaginatedResult } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import {
+  DirectUploadFile,
+  DirectUploadResult,
+  DocumentsService,
+} from '../documents/documents.service'
 import { CapaService } from '../internal-audit/capa.service'
 import { resolveDefaultReportType } from '../pv/default-report-type.util'
 import { PvCaseService } from '../pv/pv-case.service'
@@ -27,6 +32,8 @@ export interface RequestMeta {
 }
 
 export const QUALITY_COMPLAINT_RECORD_TYPE = 'quality_complaint'
+/** Pass A2 (item 4d) — the `Document.recordType` a complaint's substantiating documents are stored under. Resolving a complaint requires at least one. */
+export const COMPLAINT_SUBSTANTIATION_RECORD_TYPE = 'quality_complaint_substantiation'
 
 type DecryptedComplaint = Omit<Complaint, 'descriptionEncrypted' | 'resolutionNoteEncrypted'> & {
   description: string
@@ -43,7 +50,10 @@ function requireCompany(actor: AuthenticatedUser): string {
   return actor.companyId
 }
 
-async function nextComplaintNumber(tx: Prisma.TransactionClient, companyId: string): Promise<string> {
+async function nextComplaintNumber(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+): Promise<string> {
   const year = new Date().getUTCFullYear()
   const count = await tx.complaint.count({
     where: { companyId, complaintNumber: { startsWith: `CMP-${year}-` } },
@@ -78,6 +88,7 @@ export class ComplaintService {
     private readonly textEncryption: TextEncryptionService,
     private readonly capaService: CapaService,
     private readonly pvCaseService: PvCaseService,
+    private readonly documentsService: DocumentsService,
   ) {}
 
   private decrypt(row: Complaint): DecryptedComplaint {
@@ -128,7 +139,12 @@ export class ComplaintService {
   /** The live resolution-time KPI — never cached, matching this codebase's own "quality metrics are always live-computed" discipline. */
   async resolutionTimeKpi(
     actor: AuthenticatedUser,
-  ): Promise<{ averageDays: number | null; withinTargetPercent: number | null; targetDays: number; resolvedCount: number }> {
+  ): Promise<{
+    averageDays: number | null
+    withinTargetPercent: number | null
+    targetDays: number
+    resolvedCount: number
+  }> {
     const companyId = requireCompany(actor)
     const targetDays = 30
     return this.rls.runAsCompany(companyId, async (tx) => {
@@ -262,7 +278,8 @@ export class ComplaintService {
     const complaint = await this.rls.runAsCompany(companyId, (tx) =>
       tx.complaint.findFirst({ where: { id, companyId } }),
     )
-    if (!complaint) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Complaint not found' })
+    if (!complaint)
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Complaint not found' })
 
     const instance = await this.rls.runAsCompany(companyId, (tx) =>
       tx.workflowInstance.findFirstOrThrow({
@@ -283,7 +300,7 @@ export class ComplaintService {
         where: { id },
         data: {
           classification: dto.classification,
-          severity: dto.classification === 'quality_complaint' ? dto.severity ?? null : null,
+          severity: dto.classification === 'quality_complaint' ? (dto.severity ?? null) : null,
         },
       })
       await this.auditService.log(tx, {
@@ -339,7 +356,8 @@ export class ComplaintService {
     if (!reportType) {
       throw new ConflictException({
         code: 'NOT_CONFIGURED',
-        message: 'No PV report type is configured for this company yet — cannot route this complaint as an adverse event',
+        message:
+          'No PV report type is configured for this company yet — cannot route this complaint as an adverse event',
       })
     }
     const today = new Date().toISOString().slice(0, 10)
@@ -358,7 +376,9 @@ export class ComplaintService {
           reporterType: ReporterType.consumer,
           fullName: complaint.reporterName ?? undefined,
           email: complaint.reporterContact?.includes('@') ? complaint.reporterContact : undefined,
-          phone: !complaint.reporterContact?.includes('@') ? complaint.reporterContact ?? undefined : undefined,
+          phone: !complaint.reporterContact?.includes('@')
+            ? (complaint.reporterContact ?? undefined)
+            : undefined,
         },
         patient: {},
         suspectProducts: [
@@ -395,6 +415,21 @@ export class ComplaintService {
         where: { recordType: QUALITY_COMPLAINT_RECORD_TYPE, recordId: id },
       }),
     )
+    // Pass A2 (item 4d) — resolution is only allowed once the complaint has at
+    // least one substantiating document attached (the evidence the complaint is
+    // genuine, or the record that it was investigated and found unfounded).
+    const substantiation = await this.rls.runAsCompany(companyId, (tx) =>
+      tx.document.count({
+        where: { companyId, recordType: COMPLAINT_SUBSTANTIATION_RECORD_TYPE, recordId: id },
+      }),
+    )
+    if (substantiation === 0) {
+      throw new ConflictException({
+        code: 'SUBSTANTIATION_REQUIRED',
+        message:
+          'Attach at least one substantiating document before this complaint can be resolved',
+      })
+    }
     await this.workflowService.transition(actor, instance.id, 'resolved', {}, meta)
 
     return this.rls.runAsCompany(companyId, async (tx) => {
@@ -431,22 +466,53 @@ export class ComplaintService {
       if (!complaint)
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Complaint not found' })
 
-      return this.capaService.createFrom(
+      return this.capaService.createAllocatedFrom(
         tx,
         actor,
         companyId,
         'complaint',
         complaintId,
-        {
-          title: dto.title,
-          correctiveAction: dto.correctiveAction,
-          preventiveAction: dto.preventiveAction,
-          rootCauseCategory: dto.rootCauseCategory,
-          ownerUserId: dto.ownerUserId,
-          dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        },
+        dto,
         meta,
       )
     })
+  }
+
+  /** Pass A2 (item 4d) — a substantiating document for the complaint. Server-proxied, then audited. */
+  async uploadSubstantiation(
+    actor: AuthenticatedUser,
+    complaintId: string,
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ): Promise<DirectUploadResult> {
+    const companyId = requireCompany(actor)
+    const complaint = await this.rls.runAsCompany(companyId, (tx) =>
+      tx.complaint.findFirst({ where: { id: complaintId, companyId } }),
+    )
+    if (!complaint)
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Complaint not found' })
+
+    const result = await this.documentsService.uploadDirect(
+      actor,
+      COMPLAINT_SUBSTANTIATION_RECORD_TYPE,
+      complaintId,
+      file,
+      { title: file.originalname },
+      meta,
+    )
+
+    await this.rls.runAsCompany(companyId, (tx) =>
+      this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'complaint_substantiation_attached',
+        recordType: QUALITY_COMPLAINT_RECORD_TYPE,
+        recordId: complaintId,
+        newValue: { documentId: result.document.id, filename: file.originalname },
+        ip: meta.ip,
+      }),
+    )
+
+    return result
   }
 }

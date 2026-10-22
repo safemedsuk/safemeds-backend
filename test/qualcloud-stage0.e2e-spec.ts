@@ -62,11 +62,23 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
 
     companyId = randomUUID()
     await testPrisma.company.create({
-      data: { id: companyId, name: 'QualCloud Test Co', companyType: 'manufacturer', homeCountryId: countryId, status: 'active' },
+      data: {
+        id: companyId,
+        name: 'QualCloud Test Co',
+        companyType: 'manufacturer',
+        homeCountryId: countryId,
+        status: 'active',
+      },
     })
     otherCompanyId = randomUUID()
     await testPrisma.company.create({
-      data: { id: otherCompanyId, name: 'Other Tenant Co', companyType: 'manufacturer', homeCountryId: countryId, status: 'active' },
+      data: {
+        id: otherCompanyId,
+        name: 'Other Tenant Co',
+        companyType: 'manufacturer',
+        homeCountryId: countryId,
+        status: 'active',
+      },
     })
 
     await seedRole('QUALITY_MANAGER_TEST', [
@@ -122,13 +134,19 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
 
   describe('Suppliers (0.1)', () => {
     it('creates, lists, updates, and deactivates a supplier — never deletes it', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/suppliers'), manager)
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/suppliers'),
+        manager,
+      )
         .send({ name: 'Acme API Supplies', supplierType: 'api_supplier', criticality: 'critical' })
         .expect(201)
       const supplierId = createRes.body.data.id
       expect(createRes.body.data.approvalStatus).toBe('pending')
 
-      const listRes = await authed(request(httpServer(app)).get('/api/v1/quality/suppliers'), manager).expect(200)
+      const listRes = await authed(
+        request(httpServer(app)).get('/api/v1/quality/suppliers'),
+        manager,
+      ).expect(200)
       expect(listRes.body.data).toHaveLength(1)
 
       // `approvalStatus` is no longer a plain PATCH-able field as of
@@ -168,21 +186,33 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
     })
 
     it('RLS: a supplier created by one tenant is invisible to another tenant', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/suppliers'), manager)
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/suppliers'),
+        manager,
+      )
         .send({ name: 'Tenant A Supplier', supplierType: 'other' })
         .expect(201)
       const supplierId = createRes.body.data.id
 
-      await authed(request(httpServer(app)).get(`/api/v1/quality/suppliers/${supplierId}`), outsider).expect(404)
+      await authed(
+        request(httpServer(app)).get(`/api/v1/quality/suppliers/${supplierId}`),
+        outsider,
+      ).expect(404)
 
-      const outsiderList = await authed(request(httpServer(app)).get('/api/v1/quality/suppliers'), outsider).expect(200)
+      const outsiderList = await authed(
+        request(httpServer(app)).get('/api/v1/quality/suppliers'),
+        outsider,
+      ).expect(200)
       expect(outsiderList.body.data).toHaveLength(0)
     })
   })
 
   describe('Equipment (0.1)', () => {
     it('creates equipment and advances its qualification status', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/equipment'), manager)
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/equipment'),
+        manager,
+      )
         .send({ name: 'HPLC-1', equipmentType: 'analytical_instrument' })
         .expect(201)
       expect(createRes.body.data.qualificationStatus).toBe('not_qualified')
@@ -199,8 +229,11 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
 
   describe('Controlled documents / Sop (0.1, 0.2)', () => {
     it('creates a draft controlled document and edits it while still draft', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/sops'), manager)
-        .send({ documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' })
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/sops'),
+        manager,
+      )
+        .send({ title: 'Deviation Handling', documentType: 'sop' })
         .expect(201)
       expect(createRes.body.data.status).toBe('draft')
       expect(createRes.body.data.currentVersion).toBe(1)
@@ -214,25 +247,69 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
       expect(updateRes.body.data.title).toBe('Deviation Handling — Revised Title')
     })
 
-    it('rejects a duplicate documentNumber', async () => {
-      await authedWrite(request(httpServer(app)).post('/api/v1/quality/sops'), manager)
-        .send({ documentNumber: 'SOP-QA-002', title: 'First', documentType: 'sop' })
+    it('generates a sequential controlled-document number (Pass A); a manual number is accepted only when it is a valid identifier (Pass C)', async () => {
+      const first = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/sops'),
+        manager,
+      )
+        .send({ title: 'First', documentType: 'sop' })
         .expect(201)
+      const second = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/sops'),
+        manager,
+      )
+        .send({ title: 'Second', documentType: 'sop' })
+        .expect(201)
+      expect(first.body.data.documentNumber).toMatch(/-SOP-\d{4}-0001$/)
+      expect(second.body.data.documentNumber).toMatch(/-SOP-\d{4}-0002$/)
+      // Phase 2 Pass C: manual entry is allowed, but digits-only is refused.
       await authedWrite(request(httpServer(app)).post('/api/v1/quality/sops'), manager)
-        .send({ documentNumber: 'SOP-QA-002', title: 'Second', documentType: 'sop' })
-        .expect(409)
+        .send({ documentNumber: '0001', title: 'Digits only', documentType: 'sop' })
+        .expect(400)
+      const manual = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/sops'),
+        manager,
+      )
+        .send({ documentNumber: 'MANUAL-1', title: 'Typed by hand', documentType: 'sop' })
+        .expect(201)
+      expect(manual.body.data.documentNumber).toBe('MANUAL-1')
     })
   })
 
   describe('Specifications (0.1) — nested parameters', () => {
     it('creates a specification with structured parameters in one write and replaces them on update', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/specifications'), manager)
+      // Phase 2 Pass C: a finished-product specification must link a catalogue product.
+      const product = await testPrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`
+        return tx.product.create({
+          data: {
+            id: randomUUID(),
+            companyId,
+            brandName: 'Paracetamol',
+            genericName: 'Paracetamol',
+            productCategory: 'medicinal',
+            dosageForm: 'tablet',
+            strength: '500mg',
+          },
+        })
+      })
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/specifications'),
+        manager,
+      )
         .send({
           specificationNumber: 'SPEC-001',
           title: 'Paracetamol 500mg Tablets',
           specificationType: 'finished_product',
+          productId: product.id,
           parameters: [
-            { parameterName: 'Assay', testMethod: 'HPLC', lowerLimit: '95', upperLimit: '105', unit: '%' },
+            {
+              parameterName: 'Assay',
+              testMethod: 'HPLC',
+              lowerLimit: '95',
+              upperLimit: '105',
+              unit: '%',
+            },
             { parameterName: 'Appearance', lowerLimit: 'White to off-white tablet' },
           ],
         })
@@ -258,13 +335,19 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
       ).expect(200)
       expect(defaultsRes.body.data.retentionYears).toBe(5)
 
-      const upsertRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/retention-policies'), manager)
+      const upsertRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/retention-policies'),
+        manager,
+      )
         .send({ recordType: 'deviation', retentionYears: 8 })
         .expect(201)
       expect(upsertRes.body.data.retentionYears).toBe(8)
 
       // Re-upserting the same natural key updates in place, never duplicates.
-      await authedWrite(request(httpServer(app)).post('/api/v1/quality/retention-policies'), manager)
+      await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/retention-policies'),
+        manager,
+      )
         .send({ recordType: 'deviation', retentionYears: 10 })
         .expect(201)
 
@@ -284,7 +367,10 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
 
   describe('Risk assessments (0.3) — ICH Q9 live risk register', () => {
     it('computes and persists a real RPN score against an arbitrary quality-event source', async () => {
-      const createRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/risk-assessments'), manager)
+      const createRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/risk-assessments'),
+        manager,
+      )
         .send({
           sourceRecordType: 'deviation',
           sourceRecordId: randomUUID(),
@@ -301,7 +387,10 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
 
   describe('Severity definitions (0.3)', () => {
     it('exposes the real Critical/Major/Minor taxonomy', async () => {
-      const res = await authed(request(httpServer(app)).get('/api/v1/quality/config/severity-definitions'), manager).expect(200)
+      const res = await authed(
+        request(httpServer(app)).get('/api/v1/quality/config/severity-definitions'),
+        manager,
+      ).expect(200)
       const definitions = res.body.data as Array<{ key: string }>
       expect(definitions.map((d) => d.key)).toEqual(['critical', 'major', 'minor'])
     })
@@ -312,7 +401,10 @@ describe('QualCloud Stage 0 — Foundation (e2e)', () => {
       const sourceId = randomUUID()
       const res = await authedWrite(request(httpServer(app)).post('/api/v1/capas'), manager)
         .send({
-          title: 'Retrain operators on updated SOP',
+          rootCause: 'Operators were not trained on the updated SOP',
+          rootCauseCategory: 'human_error_training',
+          ownerUserId: manager.userId,
+          correctiveActionDueDate: '2026-12-01',
           correctiveAction: 'Retrain all line operators',
           sourceRecordType: 'deviation',
           sourceRecordId: sourceId,

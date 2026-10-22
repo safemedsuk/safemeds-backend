@@ -1,4 +1,9 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { DrugCharacterization, FalsifiedProductReport, Prisma, ReporterType } from '@prisma/client'
 
 import { newId } from '../../common/id'
@@ -87,7 +92,10 @@ export class FalsifiedProductReportService {
     return this.rls.runAsCompany(companyId, async (tx) => {
       const found = await tx.falsifiedProductReport.findFirst({ where: { id, companyId } })
       if (!found)
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Falsified product report not found' })
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Falsified product report not found',
+        })
       return found
     })
   }
@@ -99,6 +107,20 @@ export class FalsifiedProductReportService {
   ): Promise<FalsifiedProductReport> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
+      const evidenceDocumentIds = dto.evidenceDocumentIds ?? []
+      if (evidenceDocumentIds.length > 0) {
+        const owned = await tx.document.findMany({
+          where: { id: { in: evidenceDocumentIds }, companyId },
+          select: { id: true },
+        })
+        if (owned.length !== evidenceDocumentIds.length) {
+          throw new NotFoundException({
+            code: 'EVIDENCE_DOCUMENT_NOT_FOUND',
+            message: 'One or more evidence documents could not be found.',
+          })
+        }
+      }
+
       const created = await tx.falsifiedProductReport.create({
         data: {
           id: newId(),
@@ -107,8 +129,9 @@ export class FalsifiedProductReportService {
           batchId: dto.batchId ?? null,
           reportedBy: actor.sub,
           source: dto.source,
+          scannedCode: dto.scannedCode ?? null,
           evidenceDescription: dto.evidenceDescription,
-          evidenceDocumentIds: dto.evidenceDocumentIds ?? [],
+          evidenceDocumentIds,
           status: 'reported',
         },
       })
@@ -139,7 +162,10 @@ export class FalsifiedProductReportService {
       tx.falsifiedProductReport.findFirst({ where: { id, companyId } }),
     )
     if (!report)
-      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Falsified product report not found' })
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Falsified product report not found',
+      })
     if (report.status !== 'reported') {
       throw new ConflictException({
         code: 'ALREADY_DECIDED',
@@ -251,7 +277,10 @@ export class FalsifiedProductReportService {
     return this.rls.runAsCompany(companyId, async (tx) => {
       const existing = await tx.falsifiedProductReport.findFirst({ where: { id, companyId } })
       if (!existing)
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Falsified product report not found' })
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Falsified product report not found',
+        })
       if (existing.status !== 'reported') {
         throw new ConflictException({
           code: 'ALREADY_DECIDED',
@@ -278,12 +307,19 @@ export class FalsifiedProductReportService {
     })
   }
 
-  async close(actor: AuthenticatedUser, id: string, meta: RequestMeta): Promise<FalsifiedProductReport> {
+  async close(
+    actor: AuthenticatedUser,
+    id: string,
+    meta: RequestMeta,
+  ): Promise<FalsifiedProductReport> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const existing = await tx.falsifiedProductReport.findFirst({ where: { id, companyId } })
       if (!existing)
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Falsified product report not found' })
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Falsified product report not found',
+        })
       if (existing.status !== 'confirmed') {
         throw new ConflictException({
           code: 'NOT_CONFIRMED',
@@ -291,7 +327,10 @@ export class FalsifiedProductReportService {
         })
       }
 
-      const updated = await tx.falsifiedProductReport.update({ where: { id }, data: { status: 'closed' } })
+      const updated = await tx.falsifiedProductReport.update({
+        where: { id },
+        data: { status: 'closed' },
+      })
 
       await this.auditService.log(tx, {
         actorUserId: actor.sub,

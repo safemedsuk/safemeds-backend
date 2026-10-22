@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common'
 
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
+import { DocumentNumberingService } from './document-numbering.service'
 import { SopService } from './sop.service'
 
 const actor: AuthenticatedUser = {
@@ -62,7 +63,28 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
 }
 
 function buildHarness() {
-  const tables = { sop: createTable({ status: 'draft', currentVersion: 1 }) }
+  const seqCounters = new Map<string, number>()
+  const tables = {
+    sop: createTable({ status: 'draft', currentVersion: 1 }),
+    company: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme Pharma Ltd' }) },
+    documentNumberingScheme: { findMany: jest.fn().mockResolvedValue([]) },
+    $queryRaw: jest
+      .fn()
+      .mockImplementation(
+        (
+          _strings: TemplateStringsArray,
+          _id: string,
+          companyId: string,
+          documentType: string,
+          year: number,
+        ) => {
+          const key = `${companyId}|${documentType}|${year}`
+          const next = (seqCounters.get(key) ?? 0) + 1
+          seqCounters.set(key, next)
+          return Promise.resolve([{ last_value: next }])
+        },
+      ),
+  }
   const rls = {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
   }
@@ -71,7 +93,12 @@ function buildHarness() {
   const instantiate = jest.fn().mockResolvedValue(undefined)
   const workflowService = { instantiate } as never
 
-  const service = new SopService(rls as never, auditService, workflowService)
+  const service = new SopService(
+    rls as never,
+    auditService,
+    workflowService,
+    new DocumentNumberingService(rls as never, auditService),
+  )
   return { service, tables, auditLog, instantiate }
 }
 
@@ -79,39 +106,30 @@ describe('SopService', () => {
   it('rejects a platform actor with no company', async () => {
     const { service } = buildHarness()
     await expect(
-      service.create(
-        noCompanyActor,
-        { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
-        {},
-      ),
+      service.create(noCompanyActor, { title: 'Deviation Handling', documentType: 'sop' }, {}),
     ).rejects.toThrow(ForbiddenException)
   })
 
-  it('creates a draft controlled document at version 1', async () => {
+  it('creates a draft controlled document at version 1 with a server-generated number', async () => {
     const { service } = buildHarness()
     const created = await service.create(
       actor,
-      { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+      { title: 'Deviation Handling', documentType: 'sop' },
       {},
     )
     expect(created.status).toBe('draft')
     expect(created.currentVersion).toBe(1)
+    expect(created.documentNumber).toMatch(/^AP-SOP-\d{4}-0001$/)
   })
 
-  it('rejects a duplicate documentNumber at version 1', async () => {
+  it('increments the generated number per company + type + year, never reusing one', async () => {
     const { service } = buildHarness()
-    await service.create(
-      actor,
-      { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
-      {},
-    )
-    await expect(
-      service.create(
-        actor,
-        { documentNumber: 'SOP-QA-001', title: 'Something Else', documentType: 'sop' },
-        {},
-      ),
-    ).rejects.toThrow(ConflictException)
+    const first = await service.create(actor, { title: 'A', documentType: 'sop' }, {})
+    const second = await service.create(actor, { title: 'B', documentType: 'sop' }, {})
+    const other = await service.create(actor, { title: 'C', documentType: 'work_instruction' }, {})
+    expect(first.documentNumber.endsWith('-0001')).toBe(true)
+    expect(second.documentNumber.endsWith('-0002')).toBe(true)
+    expect(other.documentNumber).toMatch(/-WI-\d{4}-0001$/)
   })
 
   it('404s updating a nonexistent document', async () => {
@@ -125,7 +143,7 @@ describe('SopService', () => {
     const { service } = buildHarness()
     const created = await service.create(
       actor,
-      { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+      { title: 'Deviation Handling', documentType: 'sop' },
       {},
     )
     const updated = await service.update(actor, created.id, { title: 'Deviation Handling v2' }, {})
@@ -136,7 +154,7 @@ describe('SopService', () => {
     const { service, tables } = buildHarness()
     const created = await service.create(
       actor,
-      { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+      { title: 'Deviation Handling', documentType: 'sop' },
       {},
     )
     tables.sop.rows.set(created.id, { ...tables.sop.rows.get(created.id)!, status: 'effective' })
@@ -149,7 +167,7 @@ describe('SopService', () => {
     const { service, instantiate } = buildHarness()
     const created = await service.create(
       actor,
-      { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+      { title: 'Deviation Handling', documentType: 'sop' },
       {},
     )
     expect(instantiate).toHaveBeenCalledWith(
@@ -166,7 +184,7 @@ describe('SopService', () => {
       const { service } = buildHarness()
       const created = await service.create(
         actor,
-        { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+        { title: 'Deviation Handling', documentType: 'sop' },
         {},
       )
       await expect(service.reviseNewVersion(actor, created.id, {})).rejects.toThrow(
@@ -178,7 +196,7 @@ describe('SopService', () => {
       const { service, tables } = buildHarness()
       const created = await service.create(
         actor,
-        { documentNumber: 'SOP-QA-001', title: 'Deviation Handling', documentType: 'sop' },
+        { title: 'Deviation Handling', documentType: 'sop' },
         {},
       )
       tables.sop.rows.set(created.id, { ...tables.sop.rows.get(created.id)!, status: 'effective' })
@@ -187,7 +205,7 @@ describe('SopService', () => {
       expect(revised.status).toBe('draft')
       expect(revised.currentVersion).toBe(2)
       expect(revised.supersedesDocumentId).toBe(created.id)
-      expect(revised.documentNumber).toBe('SOP-QA-001')
+      expect(revised.documentNumber).toBe(created.documentNumber)
     })
   })
 })

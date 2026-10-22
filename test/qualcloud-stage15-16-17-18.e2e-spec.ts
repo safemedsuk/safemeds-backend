@@ -29,7 +29,13 @@ async function seedRoleWithPermissions(
   await testPrisma.role.upsert({
     where: { id: roleId },
     update: {},
-    create: { id: roleId, key: roleKey, name: roleKey, description: 'e2e fixture', isPlatform: false },
+    create: {
+      id: roleId,
+      key: roleKey,
+      name: roleKey,
+      description: 'e2e fixture',
+      isPlatform: false,
+    },
   })
   for (const key of permissionKeys) {
     const permission = await testPrisma.permission.upsert({
@@ -139,23 +145,51 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       roleKeys: ['QUALITY_ASSOCIATE'],
     })
 
-    const productRes = await authedWrite(request(httpServer(app)).post('/api/v1/products'), setupActor)
-      .send({ brandName: 'Amoxil', genericName: 'Amoxicillin', productCategory: 'medicinal', dosageForm: 'Tablet', strength: '500mg' })
+    const productRes = await authedWrite(
+      request(httpServer(app)).post('/api/v1/products'),
+      setupActor,
+    )
+      .send({
+        brandName: 'Amoxil',
+        genericName: 'Amoxicillin',
+        productCategory: 'medicinal',
+        dosageForm: 'Tablet',
+        strength: '500mg',
+      })
       .expect(201)
     productId = productRes.body.data.id as string
 
     const batchRes = await authedWrite(request(httpServer(app)).post('/api/v1/batches'), setupActor)
-      .send({ productId, batchNumber: 'B2026-001', manufacturedOn: '2026-01-01', expiresOn: '2028-01-01' })
+      .send({
+        productId,
+        batchNumber: 'B2026-001',
+        manufacturedOn: '2026-01-01',
+        expiresOn: '2028-01-01',
+      })
       .expect(201)
     batchId = batchRes.body.data.id as string
 
     // ── quality_deviation workflow fixture (needed by Stage 16's confirm()) ──
     const deviationDefinitionId = randomUUID()
     await testPrisma.workflowDefinition.create({
-      data: { id: deviationDefinitionId, recordType: 'quality_deviation', reportTypeId: null, countryId: null, version: 1, status: 'active' },
+      data: {
+        id: deviationDefinitionId,
+        recordType: 'quality_deviation',
+        reportTypeId: null,
+        countryId: null,
+        version: 1,
+        status: 'active',
+      },
     })
     await testPrisma.workflowState.create({
-      data: { id: randomUUID(), definitionId: deviationDefinitionId, stateKey: 'detected', name: 'Detected', isInitial: true, isTerminal: false },
+      data: {
+        id: randomUUID(),
+        definitionId: deviationDefinitionId,
+        stateKey: 'detected',
+        name: 'Detected',
+        isInitial: true,
+        isTerminal: false,
+      },
     })
 
     // ── pv_case workflow fixture (needed only when Stage 16's confirm() routes to a PV case) ──
@@ -166,18 +200,46 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
     })
     const pvCaseDefinitionId = randomUUID()
     await testPrisma.workflowDefinition.create({
-      data: { id: pvCaseDefinitionId, recordType: 'pv_case', reportTypeId: null, countryId: null, version: 1, status: 'active' },
+      data: {
+        id: pvCaseDefinitionId,
+        recordType: 'pv_case',
+        reportTypeId: null,
+        countryId: null,
+        version: 1,
+        status: 'active',
+      },
     })
     await testPrisma.workflowState.create({
-      data: { id: randomUUID(), definitionId: pvCaseDefinitionId, stateKey: 'intake', name: 'Intake', isInitial: true, isTerminal: true },
+      data: {
+        id: randomUUID(),
+        definitionId: pvCaseDefinitionId,
+        stateKey: 'intake',
+        name: 'Intake',
+        isInitial: true,
+        isTerminal: true,
+      },
     })
 
     // ── quality_controlled_document workflow fixture (needed by Stage 18) ──
     sopDefinitionId = randomUUID()
     await testPrisma.workflowDefinition.create({
-      data: { id: sopDefinitionId, recordType: 'quality_controlled_document', reportTypeId: null, countryId: null, version: 1, status: 'active' },
+      data: {
+        id: sopDefinitionId,
+        recordType: 'quality_controlled_document',
+        reportTypeId: null,
+        countryId: null,
+        version: 1,
+        status: 'active',
+      },
     })
-    const sopStateKeys = ['draft', 'in_review', 'approved', 'effective', 'superseded', 'retired'] as const
+    const sopStateKeys = [
+      'draft',
+      'in_review',
+      'approved',
+      'effective',
+      'superseded',
+      'retired',
+    ] as const
     sopStateIds = {}
     for (const key of sopStateKeys) sopStateIds[key] = randomUUID()
     await testPrisma.workflowState.createMany({
@@ -192,9 +254,30 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
     })
     await testPrisma.workflowTransition.createMany({
       data: [
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.draft, toStateId: sopStateIds.in_review, requiredRoleId: qaRoleId, requiresSignature: false },
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.in_review, toStateId: sopStateIds.approved, requiredRoleId: qmRoleId, requiresSignature: true },
-        { id: randomUUID(), definitionId: sopDefinitionId, fromStateId: sopStateIds.approved, toStateId: sopStateIds.effective, requiredRoleId: qmRoleId, requiresSignature: false },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.draft,
+          toStateId: sopStateIds.in_review,
+          requiredRoleId: qaRoleId,
+          requiresSignature: false,
+        },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.in_review,
+          toStateId: sopStateIds.approved,
+          requiredRoleId: qmRoleId,
+          requiresSignature: true,
+        },
+        {
+          id: randomUUID(),
+          definitionId: sopDefinitionId,
+          fromStateId: sopStateIds.approved,
+          toStateId: sopStateIds.effective,
+          requiredRoleId: qmRoleId,
+          requiresSignature: false,
+        },
       ],
     })
 
@@ -206,7 +289,13 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
     await testPrisma.wasteDisposalMethodCatalogEntry.upsert({
       where: { methodKey: 'incineration' },
       update: {},
-      create: { id: newId(), methodKey: 'incineration', label: 'Incineration', sortOrder: 1, active: true },
+      create: {
+        id: newId(),
+        methodKey: 'incineration',
+        label: 'Incineration',
+        sortOrder: 1,
+        active: true,
+      },
     })
   })
 
@@ -214,10 +303,16 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
     it('logs a disposal, lists the active method catalog, and records a witness signature', async () => {
       const qa = await actorWith('QUALITY_ASSOCIATE')
 
-      const methods = await authedWrite(request(httpServer(app)).get('/api/v1/quality/waste-disposal-methods'), qa).expect(200)
+      const methods = await authedWrite(
+        request(httpServer(app)).get('/api/v1/quality/waste-disposal-methods'),
+        qa,
+      ).expect(200)
       expect(methods.body.data.length).toBeGreaterThan(0)
 
-      const created = await authedWrite(request(httpServer(app)).post('/api/v1/quality/waste-disposal'), qa)
+      const created = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/waste-disposal'),
+        qa,
+      )
         .send({
           batchId,
           wasteType: 'rejected_batch',
@@ -233,7 +328,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
 
       const witnessToken = await signatureTokenFor(qa)
       const witnessed = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/waste-disposal/${created.body.data.id}/witness`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/waste-disposal/${created.body.data.id}/witness`,
+        ),
         qa,
       )
         .send({ intentStatement: 'I witnessed this destruction', signatureToken: witnessToken })
@@ -243,7 +340,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       // A second witness attempt is rejected.
       const secondToken = await signatureTokenFor(qa)
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/waste-disposal/${created.body.data.id}/witness`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/waste-disposal/${created.body.data.id}/witness`,
+        ),
         qa,
       )
         .send({ intentStatement: 'again', signatureToken: secondToken })
@@ -269,7 +368,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       expect(created.body.data.status).toBe('reported')
 
       const confirmed = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/falsified-product-reports/${created.body.data.id}/confirm`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/falsified-product-reports/${created.body.data.id}/confirm`,
+        ),
         qa,
       )
         .send({ routeToPvCase: true, authorityNotified: true })
@@ -286,7 +387,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       expect(deviation.sourceType).toBe('monitoring_alert')
 
       const closed = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/falsified-product-reports/${created.body.data.id}/close`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/falsified-product-reports/${created.body.data.id}/close`,
+        ),
         qa,
       ).expect(201)
       expect(closed.body.data.status).toBe('closed')
@@ -302,7 +405,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
         .expect(201)
 
       const dismissed = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/falsified-product-reports/${created.body.data.id}/dismiss`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/falsified-product-reports/${created.body.data.id}/dismiss`,
+        ),
         qa,
       )
         .send({ reason: 'Investigated — product confirmed genuine' })
@@ -311,7 +416,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
 
       // close() refuses once dismissed.
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/falsified-product-reports/${created.body.data.id}/close`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/falsified-product-reports/${created.body.data.id}/close`,
+        ),
         qa,
       ).expect(409)
     })
@@ -319,16 +426,25 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
 
   describe('Stage 17 — Batch Release (Qualified Person)', () => {
     async function setUpReviewedBatch(reviewer: TestActor): Promise<void> {
-      const brrRes = await authedWrite(request(httpServer(app)).post('/api/v1/quality/batch-record-reviews'), reviewer)
+      const brrRes = await authedWrite(
+        request(httpServer(app)).post('/api/v1/quality/batch-record-reviews'),
+        reviewer,
+      )
         .send({ batchId })
         .expect(201)
       const reviewId = brrRes.body.data.id as string
       const dispositionToken = await signatureTokenFor(reviewer)
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/batch-record-reviews/${reviewId}/disposition`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/batch-record-reviews/${reviewId}/disposition`,
+        ),
         reviewer,
       )
-        .send({ disposition: 'released', intentStatement: 'QA review complete', signatureToken: dispositionToken })
+        .send({
+          disposition: 'released',
+          intentStatement: 'QA review complete',
+          signatureToken: dispositionToken,
+        })
         .expect(201)
     }
 
@@ -366,8 +482,16 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       )
 
       const releaseToken1 = await signatureTokenFor(qp)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/quality/batches/${batchId}/release`), qp)
-        .send({ decision: 'released', riskAcceptances: [], intentStatement: 'release', signatureToken: releaseToken1 })
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/quality/batches/${batchId}/release`),
+        qp,
+      )
+        .send({
+          decision: 'released',
+          riskAcceptances: [],
+          intentStatement: 'release',
+          signatureToken: releaseToken1,
+        })
         .expect(409)
 
       const releaseToken2 = await signatureTokenFor(qp)
@@ -377,7 +501,13 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       )
         .send({
           decision: 'released',
-          riskAcceptances: [{ recordType: 'quality_deviation', recordId: deviationId, reason: 'Unrelated to this batch, confirmed by QA' }],
+          riskAcceptances: [
+            {
+              recordType: 'quality_deviation',
+              recordId: deviationId,
+              reason: 'Unrelated to this batch, confirmed by QA',
+            },
+          ],
           intentStatement: 'I release this batch for distribution',
           signatureToken: releaseToken2,
         })
@@ -392,8 +522,16 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       const qm = await actorWith('QUALITY_MANAGER')
       await setUpReviewedBatch(qm)
       const token = await signatureTokenFor(qm)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/quality/batches/${batchId}/release`), qm)
-        .send({ decision: 'released', riskAcceptances: [], intentStatement: 'release', signatureToken: token })
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/quality/batches/${batchId}/release`),
+        qm,
+      )
+        .send({
+          decision: 'released',
+          riskAcceptances: [],
+          intentStatement: 'release',
+          signatureToken: token,
+        })
         .expect(403)
     })
   })
@@ -410,7 +548,6 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
         .send({
           title: 'Cleaning Validation — Granulation Line 1',
           validationType: 'cleaning',
-          documentNumber: 'VAL-CLN-001',
         })
         .expect(201)
       const protocolId = createdProtocol.body.data.id as string
@@ -428,14 +565,27 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       const instance = await testPrisma.workflowInstance.findFirstOrThrow({
         where: { recordType: 'quality_controlled_document', recordId: sopId },
       })
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), author)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        author,
+      )
         .send({ toStateKey: 'in_review' })
         .expect(201)
       const approveToken = await signatureTokenFor(approver)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), approver)
-        .send({ toStateKey: 'approved', signatureToken: approveToken, intentStatement: 'I approve this validation protocol' })
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        approver,
+      )
+        .send({
+          toStateKey: 'approved',
+          signatureToken: approveToken,
+          intentStatement: 'I approve this validation protocol',
+        })
         .expect(201)
-      await authedWrite(request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`), approver)
+      await authedWrite(
+        request(httpServer(app)).post(`/api/v1/workflow/instances/${instance.id}/transition`),
+        approver,
+      )
         .send({ toStateKey: 'effective' })
         .expect(201)
 
@@ -448,7 +598,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       expect(report.body.data.conclusion).toBe('validated')
 
       const finalized = await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/validation-protocols/reports/${report.body.data.id}/finalize`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/validation-protocols/reports/${report.body.data.id}/finalize`,
+        ),
         approver,
       )
         .send({ conclusion: 'conditionally_validated' })
@@ -459,7 +611,9 @@ describe('QualCloud Stage 15/16/17/18 (e2e)', () => {
       const authorToken = await signatureTokenFor(author)
       void authorToken
       await authedWrite(
-        request(httpServer(app)).post(`/api/v1/quality/validation-protocols/reports/${report.body.data.id}/finalize`),
+        request(httpServer(app)).post(
+          `/api/v1/quality/validation-protocols/reports/${report.body.data.id}/finalize`,
+        ),
         author,
       )
         .send({ conclusion: 'validated' })

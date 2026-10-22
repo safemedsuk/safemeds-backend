@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Equipment, Prisma } from '@prisma/client'
+import { Equipment, MaintenanceRecord, Prisma } from '@prisma/client'
 
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
@@ -9,6 +9,7 @@ import { AuditService } from '../audit/audit.service'
 import { CreateEquipmentDto } from './dto/create-equipment.dto'
 import { ListEquipmentQueryDto } from './dto/list-equipment-query.dto'
 import { UpdateEquipmentDto } from './dto/update-equipment.dto'
+import { equipmentDueStatus } from './equipment-due-status.util'
 
 export interface RequestMeta {
   ip?: string
@@ -33,6 +34,13 @@ function requireCompany(actor: AuthenticatedUser): string {
  * dates be set directly, matching the project's own stage-split
  * discipline.
  */
+/** Equipment as returned by the register list: the row plus its derived due statuses and latest maintenance entry. */
+export type EquipmentRow = Equipment & {
+  calibrationStatus: ReturnType<typeof equipmentDueStatus>
+  maintenanceStatus: ReturnType<typeof equipmentDueStatus>
+  latestMaintenance: MaintenanceRecord | null
+}
+
 @Injectable()
 export class EquipmentService {
   constructor(
@@ -43,7 +51,7 @@ export class EquipmentService {
   async list(
     actor: AuthenticatedUser,
     query: ListEquipmentQueryDto,
-  ): Promise<PaginatedResult<Equipment>> {
+  ): Promise<PaginatedResult<EquipmentRow>> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const where: Prisma.EquipmentWhereInput = {
@@ -61,7 +69,27 @@ export class EquipmentService {
         }),
         tx.equipment.count({ where }),
       ])
-      return paginate(rows, total, query)
+      // Pass B (item C1/C2): derived calibration/maintenance status, and the
+      // latest maintenance entry per row. One query for the whole page.
+      const latestByEquipment = new Map<string, MaintenanceRecord>()
+      if (rows.length > 0) {
+        const entries = await tx.maintenanceRecord.findMany({
+          where: { companyId, equipmentId: { in: rows.map((r) => r.id) } },
+          orderBy: { maintenanceDate: 'desc' },
+        })
+        for (const entry of entries) {
+          if (!latestByEquipment.has(entry.equipmentId))
+            latestByEquipment.set(entry.equipmentId, entry)
+        }
+      }
+      const now = new Date()
+      const enriched: EquipmentRow[] = rows.map((row) => ({
+        ...row,
+        calibrationStatus: equipmentDueStatus(row.calibrationDueAt, now),
+        maintenanceStatus: equipmentDueStatus(row.maintenanceDueAt, now),
+        latestMaintenance: latestByEquipment.get(row.id) ?? null,
+      }))
+      return paginate(enriched, total, query)
     })
   }
 

@@ -12,6 +12,11 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { paginate, PaginatedResult } from '../../common/pagination'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
+import {
+  DirectUploadFile,
+  DirectUploadResult,
+  DocumentsService,
+} from '../documents/documents.service'
 import { CapaService } from '../internal-audit/capa.service'
 import { WorkflowService } from '../workflow/workflow.service'
 import { CreateDeviationDto } from './dto/create-deviation.dto'
@@ -76,6 +81,7 @@ export class DeviationService {
     private readonly workflowService: WorkflowService,
     private readonly textEncryption: TextEncryptionService,
     private readonly capaService: CapaService,
+    private readonly documentsService: DocumentsService,
   ) {}
 
   private decrypt(row: Deviation): DecryptedDeviation {
@@ -127,9 +133,14 @@ export class DeviationService {
     actor: AuthenticatedUser,
     id: string,
   ): Promise<
-    DecryptedDeviation & { investigation: Investigation | null; workflowInstanceId: string | null }
+    DecryptedDeviation & {
+      investigation: Investigation | null
+      workflowInstanceId: string | null
+      capas: Awaited<ReturnType<CapaService['listForSource']>>
+    }
   > {
     const companyId = requireCompany(actor)
+    const capas = await this.capaService.listForSource(actor, 'deviation', id)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const found = await tx.deviation.findFirst({
         where: { id, companyId },
@@ -144,6 +155,7 @@ export class DeviationService {
         ...this.decrypt(rest),
         investigation,
         workflowInstanceId: workflowInstance?.id ?? null,
+        capas,
       }
     })
   }
@@ -267,10 +279,10 @@ export class DeviationService {
 
   /**
    * Opens the CAPA `QualityWorkflowGuards`' own `capa_pending → closed`
-   * guard requires — only while the deviation is in `capa_pending`,
-   * using `CapaService.createFrom()`'s direct, non-HTTP entry point
-   * inside this same transaction, exactly as that method's own doc
-   * comment anticipates.
+   * guard requires — only while the deviation is in `capa_pending`. Pass A2:
+   * goes through `CapaService.createAllocatedFrom()`, so the owner, separate
+   * corrective/preventive due dates, root cause and regulatory approver rules
+   * apply exactly as they do on the CAPA form.
    */
   async openCapaForDeviation(
     actor: AuthenticatedUser,
@@ -290,24 +302,71 @@ export class DeviationService {
         })
       }
 
-      const capa = await this.capaService.createFrom(
+      return this.capaService.createAllocatedFrom(
         tx,
         actor,
         companyId,
         'deviation',
         deviationId,
-        {
-          title: dto.title,
-          correctiveAction: dto.correctiveAction,
-          preventiveAction: dto.preventiveAction,
-          rootCauseCategory: dto.rootCauseCategory,
-          ownerUserId: dto.ownerUserId,
-          dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        },
+        dto,
         meta,
       )
-
-      return capa
     })
   }
+
+  /**
+   * Pass A2 (item 4a/4c) — attaches an investigation document to a deviation:
+   * `evidence` (any supporting record) or `report` (the investigation report
+   * itself, which the `investigating → capa_pending` transition requires).
+   * Server-proxied through the existing documents upload path, then audited.
+   */
+  async uploadInvestigationDocument(
+    actor: AuthenticatedUser,
+    deviationId: string,
+    kind: 'evidence' | 'report',
+    file: DirectUploadFile,
+    meta: RequestMeta,
+  ): Promise<DirectUploadResult> {
+    const companyId = requireCompany(actor)
+    const deviation = await this.rls.runAsCompany(companyId, (tx) =>
+      tx.deviation.findFirst({ where: { id: deviationId, companyId } }),
+    )
+    if (!deviation)
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Deviation not found' })
+    if (deviation.status === 'closed') {
+      throw new ConflictException({
+        code: 'ALREADY_CLOSED',
+        message: 'A closed deviation cannot take new investigation documents',
+      })
+    }
+
+    const recordType = investigationDocumentRecordType(kind)
+    const result = await this.documentsService.uploadDirect(
+      actor,
+      recordType,
+      deviationId,
+      file,
+      { title: file.originalname },
+      meta,
+    )
+
+    await this.rls.runAsCompany(companyId, (tx) =>
+      this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'investigation_document_attached',
+        recordType: QUALITY_DEVIATION_RECORD_TYPE,
+        recordId: deviationId,
+        newValue: { kind, documentId: result.document.id, filename: file.originalname },
+        ip: meta.ip,
+      }),
+    )
+
+    return result
+  }
+}
+
+/** The `Document.recordType` an investigation document is stored under — shared with `QualityWorkflowGuards`' report check. */
+export function investigationDocumentRecordType(kind: 'evidence' | 'report'): string {
+  return kind === 'report' ? 'deviation_investigation_report' : 'deviation_investigation_evidence'
 }

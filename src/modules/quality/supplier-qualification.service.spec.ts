@@ -36,12 +36,13 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
   })
   const findFirst = jest
     .fn()
-    .mockImplementation(({ where, include }: { where: Record<string, unknown>; include?: unknown }) =>
-      Promise.resolve(
-        [...rows.values()].find((r) => matches(r, where))
-          ? { ...[...rows.values()].find((r) => matches(r, where)), ...(include ? {} : {}) }
-          : null,
-      ),
+    .mockImplementation(
+      ({ where, include }: { where: Record<string, unknown>; include?: unknown }) =>
+        Promise.resolve(
+          [...rows.values()].find((r) => matches(r, where))
+            ? { ...[...rows.values()].find((r) => matches(r, where)), ...(include ? {} : {}) }
+            : null,
+        ),
     )
   const findMany = jest
     .fn()
@@ -55,20 +56,22 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
     )
   const update = jest
     .fn()
-    .mockImplementation(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
-      const existing = rows.get(where.id)!
-      const merged: Record<string, unknown> = { ...existing }
-      for (const [key, value] of Object.entries(data)) {
-        if (value && typeof value === 'object' && 'push' in (value as Record<string, unknown>)) {
-          const existingArr = (merged[key] as unknown[]) ?? []
-          merged[key] = [...existingArr, (value as { push: unknown }).push]
-        } else {
-          merged[key] = value
+    .mockImplementation(
+      ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const existing = rows.get(where.id)!
+        const merged: Record<string, unknown> = { ...existing }
+        for (const [key, value] of Object.entries(data)) {
+          if (value && typeof value === 'object' && 'push' in (value as Record<string, unknown>)) {
+            const existingArr = (merged[key] as unknown[]) ?? []
+            merged[key] = [...existingArr, (value as { push: unknown }).push]
+          } else {
+            merged[key] = value
+          }
         }
-      }
-      rows.set(where.id, merged as T)
-      return Promise.resolve(merged)
-    })
+        rows.set(where.id, merged as T)
+        return Promise.resolve(merged)
+      },
+    )
   return { rows, create, findFirst, findMany, findUnique, update }
 }
 
@@ -82,8 +85,18 @@ function buildHarness() {
   const certificateOfAnalysis = createTable<Row>()
   const specification = createTable<Row>()
   const company = createTable<Row>()
+  const document = createTable<Row>()
+  const supplierPerformanceReview = createTable<Row>()
 
-  const tables = { supplier, supplierQuestionnaire, certificateOfAnalysis, specification, company }
+  const tables = {
+    supplier,
+    supplierQuestionnaire,
+    certificateOfAnalysis,
+    specification,
+    company,
+    document,
+    supplierPerformanceReview,
+  }
   const rls = {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
     runWithSystemAccess: (fn: (tx: typeof tables) => unknown) => fn(tables),
@@ -95,13 +108,19 @@ function buildHarness() {
   const escalateForRecord = jest.fn().mockResolvedValue(undefined)
   const tasksService = { escalateForRecord } as never
 
+  const uploadDirect = jest
+    .fn()
+    .mockResolvedValue({ document: { id: 'doc-uploaded' }, version: { id: 'v1' } })
+  const documentsService = { uploadDirect } as never
+
   const service = new SupplierQualificationService(
     rls as never,
     auditService,
     internalAuditService,
     tasksService,
+    documentsService,
   )
-  return { service, tables, auditLog, internalAuditCreate, escalateForRecord }
+  return { service, tables, auditLog, internalAuditCreate, escalateForRecord, uploadDirect }
 }
 
 describe('SupplierQualificationService', () => {
@@ -115,7 +134,12 @@ describe('SupplierQualificationService', () => {
   it('404s assess() against a supplier that does not exist', async () => {
     const { service } = buildHarness()
     await expect(
-      service.assess(actor, 'missing', { title: 'x', criteria: [{ question: 'q', weight: 1, score: 1 }] }, {}),
+      service.assess(
+        actor,
+        'missing',
+        { title: 'x', criteria: [{ question: 'q', weight: 1, score: 1 }] },
+        {},
+      ),
     ).rejects.toThrow(NotFoundException)
   })
 
@@ -156,6 +180,7 @@ describe('SupplierQualificationService', () => {
       companyId: 'company-1',
       criticality: 'critical',
       approvalStatus: 'pending',
+      gmpCertificateDocumentId: 'gmp-1',
     })
     tables.company.rows.set('company-1', { id: 'company-1' })
 
@@ -173,6 +198,7 @@ describe('SupplierQualificationService', () => {
     tables.supplier.rows.set('s1', {
       id: 's1',
       companyId: 'company-1',
+      gmpCertificateDocumentId: 'gmp-1',
       criticality: 'non_critical',
       approvalStatus: 'pending',
     })
@@ -191,10 +217,108 @@ describe('SupplierQualificationService', () => {
   it('monitor() appends a timestamped flag without losing prior flags', async () => {
     const { service, tables } = buildHarness()
     tables.supplier.rows.set('s1', { id: 's1', companyId: 'company-1', performanceFlags: [] })
-    await service.monitor(actor, 's1', { flag: 'late delivery' }, {})
-    const updated = await service.monitor(actor, 's1', { flag: 'CoA discrepancy' }, {})
-    expect((updated.performanceFlags).length).toBe(2)
-    expect((updated.performanceFlags)[1]).toContain('CoA discrepancy')
+    tables.document.rows.set('chk-1', {
+      id: 'chk-1',
+      companyId: 'company-1',
+      recordType: 'supplier',
+      recordId: 's1',
+    })
+    await service.monitor(actor, 's1', { flag: 'late delivery', checklistDocumentId: 'chk-1' }, {})
+    const updated = await service.monitor(
+      actor,
+      's1',
+      { flag: 'CoA discrepancy', checklistDocumentId: 'chk-1' },
+      {},
+    )
+    expect(updated.performanceFlags.length).toBe(2)
+    expect(updated.performanceFlags[1]).toContain('CoA discrepancy')
+  })
+
+  it('approve() refuses a supplier with no GMP certificate on file (Pass B D1)', async () => {
+    const { service, tables } = buildHarness()
+    tables.supplier.rows.set('s1', {
+      id: 's1',
+      companyId: 'company-1',
+      criticality: 'critical',
+      approvalStatus: 'pending',
+    })
+    tables.company.rows.set('company-1', { id: 'company-1' })
+    await expect(
+      service.approve(actor, 's1', { approvalStatus: 'approved' }, {}),
+    ).rejects.toMatchObject({
+      response: { code: 'GMP_CERTIFICATE_REQUIRED' },
+    })
+    expect(tables.supplier.rows.get('s1')!.approvalStatus).toBe('pending')
+  })
+
+  it('approve() still allows suspending a supplier that has no GMP certificate', async () => {
+    const { service, tables } = buildHarness()
+    tables.supplier.rows.set('s1', {
+      id: 's1',
+      companyId: 'company-1',
+      criticality: 'critical',
+      approvalStatus: 'approved',
+    })
+    const updated = await service.approve(actor, 's1', { approvalStatus: 'suspended' }, {})
+    expect(updated.approvalStatus).toBe('suspended')
+  })
+
+  it('monitor() refuses a review whose checklist is not a document on this supplier (Pass B D2)', async () => {
+    const { service, tables } = buildHarness()
+    tables.supplier.rows.set('s1', { id: 's1', companyId: 'company-1', performanceFlags: [] })
+    tables.document.rows.set('other', {
+      id: 'other',
+      companyId: 'company-1',
+      recordType: 'supplier',
+      recordId: 's2',
+    })
+    await expect(
+      service.monitor(actor, 's1', { flag: 'late delivery', checklistDocumentId: 'other' }, {}),
+    ).rejects.toMatchObject({ response: { code: 'CHECKLIST_NOT_FOUND' } })
+    expect(tables.supplierPerformanceReview.create).not.toHaveBeenCalled()
+  })
+
+  it('monitor() records a review with the checklist attached and a next review due 24 months out (Pass B D3)', async () => {
+    const { service, tables } = buildHarness()
+    tables.supplier.rows.set('s1', { id: 's1', companyId: 'company-1', performanceFlags: [] })
+    tables.document.rows.set('chk-1', {
+      id: 'chk-1',
+      companyId: 'company-1',
+      recordType: 'supplier',
+      recordId: 's1',
+    })
+    await service.monitor(
+      actor,
+      's1',
+      { flag: 'on-time 98%', checklistDocumentId: 'chk-1', notes: 'Good year' },
+      {},
+    )
+    const review = [...tables.supplierPerformanceReview.rows.values()][0]
+    expect(review.checklistDocumentId).toBe('chk-1')
+    expect(review.performanceFlags).toEqual(['on-time 98%'])
+    const reviewedAt = review.reviewedAt as Date
+    const due = review.nextReviewDueAt as Date
+    expect(due.getUTCFullYear() - reviewedAt.getUTCFullYear()).toBe(2)
+  })
+
+  it('attachGmpCertificate() uploads against the supplier and links the document id', async () => {
+    const { service, tables, uploadDirect } = buildHarness()
+    tables.supplier.rows.set('s1', { id: 's1', companyId: 'company-1', name: 'Acme API Co' })
+    await service.attachGmpCertificate(
+      actor,
+      's1',
+      { buffer: Buffer.from('x'), originalname: 'gmp.pdf', mimetype: 'application/pdf' },
+      {},
+    )
+    expect(uploadDirect).toHaveBeenCalledWith(
+      actor,
+      'supplier',
+      's1',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(tables.supplier.rows.get('s1')!.gmpCertificateDocumentId).toBe('doc-uploaded')
   })
 
   it('createCoa() computes pass/fail against numeric spec limits and quarantines on any failure', async () => {
@@ -264,7 +388,12 @@ describe('SupplierQualificationService', () => {
     await expect(
       service.createCoa(
         actor,
-        { supplierId: 's1', materialSpecificationId: 'spec-1', batchOrLotNumber: 'L1', results: [] },
+        {
+          supplierId: 's1',
+          materialSpecificationId: 'spec-1',
+          batchOrLotNumber: 'L1',
+          results: [],
+        },
         {},
       ),
     ).rejects.toThrow()

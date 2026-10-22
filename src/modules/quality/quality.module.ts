@@ -15,7 +15,10 @@ import { SignaturesModule } from '../signatures/signatures.module'
 import { TasksModule } from '../tasks/tasks.module'
 import { TrainingModule } from '../training/training.module'
 import { WorkflowModule } from '../workflow/workflow.module'
-import { BatchRecordReviewController, QualityBatchController } from './batch-record-review.controller'
+import {
+  BatchRecordReviewController,
+  QualityBatchController,
+} from './batch-record-review.controller'
 import { BatchRecordReviewService } from './batch-record-review.service'
 import { BatchReleaseController } from './batch-release.controller'
 import { BatchReleaseService } from './batch-release.service'
@@ -26,11 +29,13 @@ import { ComplaintController } from './complaint.controller'
 import { ComplaintService } from './complaint.service'
 import { DeviationController } from './deviation.controller'
 import { DeviationService } from './deviation.service'
+import { DeviationInvestigationReminderService } from './deviation-investigation-reminder.service'
 import {
   DocumentAcknowledgmentController,
   DocumentAcknowledgmentOverdueController,
 } from './document-acknowledgment.controller'
 import { DocumentAcknowledgmentService } from './document-acknowledgment.service'
+import { DocumentNumberingService } from './document-numbering.service'
 import { EnvironmentalMonitoringController } from './environmental-monitoring.controller'
 import { EnvironmentalMonitoringService } from './environmental-monitoring.service'
 import { EquipmentController } from './equipment.controller'
@@ -48,7 +53,11 @@ import { QualityConfigController } from './quality-config.controller'
 import {
   CALIBRATION_MAINTENANCE_QUEUE,
   CalibrationMaintenanceScanProcessor,
+  DEVIATION_INVESTIGATION_REMINDER_QUEUE,
+  DeviationInvestigationReminderProcessor,
+  SUPPLIER_BIENNIAL_REVIEW_REMINDER_QUEUE,
   SUPPLIER_REQUALIFICATION_QUEUE,
+  SupplierBiennialReviewReminderProcessor,
   SupplierRequalificationProcessor,
 } from './quality-scan.processor'
 import { QualityWorkflowGuards } from './quality-workflow-guards.service'
@@ -64,16 +73,23 @@ import { StabilityController } from './stability.controller'
 import { StabilityService } from './stability.service'
 import { SupplierController } from './supplier.controller'
 import { SupplierService } from './supplier.service'
-import { CertificateOfAnalysisController, SupplierQualificationController } from './supplier-qualification.controller'
+import { SupplierBiennialReviewReminderService } from './supplier-biennial-review-reminder.service'
+import {
+  CertificateOfAnalysisController,
+  SupplierQualificationController,
+} from './supplier-qualification.controller'
 import { SupplierQualificationService } from './supplier-qualification.service'
 import { ValidationController } from './validation.controller'
 import { ValidationService } from './validation.service'
+import { WasteDestructionPdfService } from './waste-destruction-pdf.service'
 import {
   WasteDisposalController,
   WasteDisposalMethodCatalogController,
   WasteDisposalMethodCatalogReadController,
 } from './waste-disposal.controller'
 import { WasteDisposalService } from './waste-disposal.service'
+import { WasteDisposalCaseController } from './waste-disposal-case.controller'
+import { WasteDisposalCaseService } from './waste-disposal-case.service'
 import { WasteDisposalMethodCatalogService } from './waste-disposal-method-catalog.service'
 
 function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
@@ -90,6 +106,10 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
 
 const SUPPLIER_REQUALIFICATION_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
 const CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
+/** Daily — an investigation's approaching/overdue reminder cadence (Pass A2 item 5b). */
+const DEVIATION_INVESTIGATION_REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000
+/** Daily — the biennial supplier performance review reminder (Pass B item D3). */
+const SUPPLIER_BIENNIAL_REVIEW_REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /**
  * QualCloud (Phase 13) Stages 0–7 — Foundation Layer, Document Control,
@@ -129,6 +149,16 @@ const CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
       inject: [ConfigService],
       useFactory: redisConnectionFactory,
     }),
+    BullModule.registerQueueAsync({
+      name: DEVIATION_INVESTIGATION_REMINDER_QUEUE,
+      inject: [ConfigService],
+      useFactory: redisConnectionFactory,
+    }),
+    BullModule.registerQueueAsync({
+      name: SUPPLIER_BIENNIAL_REVIEW_REMINDER_QUEUE,
+      inject: [ConfigService],
+      useFactory: redisConnectionFactory,
+    }),
   ],
   controllers: [
     SupplierController,
@@ -151,6 +181,7 @@ const CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
     QualityBatchController,
     PqrController,
     WasteDisposalController,
+    WasteDisposalCaseController,
     WasteDisposalMethodCatalogController,
     WasteDisposalMethodCatalogReadController,
     FalsifiedProductReportController,
@@ -166,7 +197,12 @@ const CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
     EquipmentService,
     EquipmentQualificationService,
     CalibrationMaintenanceScanProcessor,
+    DeviationInvestigationReminderService,
+    DeviationInvestigationReminderProcessor,
+    SupplierBiennialReviewReminderService,
+    SupplierBiennialReviewReminderProcessor,
     SopService,
+    DocumentNumberingService,
     SpecificationService,
     RetentionPolicyService,
     RiskAssessmentService,
@@ -181,6 +217,8 @@ const CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000
     PqrService,
     PqrPdfService,
     WasteDisposalService,
+    WasteDisposalCaseService,
+    WasteDestructionPdfService,
     WasteDisposalMethodCatalogService,
     FalsifiedProductReportService,
     BatchReleaseService,
@@ -218,6 +256,10 @@ export class QualityModule implements OnModuleInit {
   constructor(
     @InjectQueue(SUPPLIER_REQUALIFICATION_QUEUE) private readonly supplierRequalQueue: Queue,
     @InjectQueue(CALIBRATION_MAINTENANCE_QUEUE) private readonly calibrationQueue: Queue,
+    @InjectQueue(DEVIATION_INVESTIGATION_REMINDER_QUEUE)
+    private readonly investigationReminderQueue: Queue,
+    @InjectQueue(SUPPLIER_BIENNIAL_REVIEW_REMINDER_QUEUE)
+    private readonly supplierBiennialQueue: Queue,
     private readonly configService: ConfigService<EnvConfig, true>,
   ) {}
 
@@ -228,12 +270,34 @@ export class QualityModule implements OnModuleInit {
     await this.supplierRequalQueue.add(
       'scan',
       {},
-      { repeat: { every: SUPPLIER_REQUALIFICATION_SCAN_INTERVAL_MS }, jobId: 'supplier-requalification-daily' },
+      {
+        repeat: { every: SUPPLIER_REQUALIFICATION_SCAN_INTERVAL_MS },
+        jobId: 'supplier-requalification-daily',
+      },
     )
     await this.calibrationQueue.add(
       'scan',
       {},
-      { repeat: { every: CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS }, jobId: 'calibration-maintenance-daily' },
+      {
+        repeat: { every: CALIBRATION_MAINTENANCE_SCAN_INTERVAL_MS },
+        jobId: 'calibration-maintenance-daily',
+      },
+    )
+    await this.investigationReminderQueue.add(
+      'scan',
+      {},
+      {
+        repeat: { every: DEVIATION_INVESTIGATION_REMINDER_INTERVAL_MS },
+        jobId: 'deviation-investigation-reminder-daily',
+      },
+    )
+    await this.supplierBiennialQueue.add(
+      'scan',
+      {},
+      {
+        repeat: { every: SUPPLIER_BIENNIAL_REVIEW_REMINDER_INTERVAL_MS },
+        jobId: 'supplier-biennial-review-reminder-daily',
+      },
     )
   }
 }

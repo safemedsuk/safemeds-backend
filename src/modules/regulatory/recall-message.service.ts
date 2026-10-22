@@ -72,7 +72,11 @@ export class RecallMessageService {
         where: { id: dto.stakeholderId, companyId },
       })
       if (!stakeholder) {
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Stakeholder not found' })
+        throw new NotFoundException({
+          code: 'STAKEHOLDER_NOT_FOUND',
+          message:
+            'That stakeholder is not in your stakeholder list. Pick one from the list, or create it first.',
+        })
       }
 
       const canSendNow = dto.channel === 'email' && !!stakeholder.contactEmail

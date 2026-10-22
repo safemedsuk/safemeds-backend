@@ -14,11 +14,15 @@ export class AssemblePqrDto {
   @IsUUID()
   productId!: string
 
+  /** Optional. Omitted = 1 January of the current year (UTC). */
+  @IsOptional()
   @IsDateString()
-  periodStart!: string
+  periodStart?: string
 
+  /** Optional. Omitted = 31 December of the current year (UTC). */
+  @IsOptional()
   @IsDateString()
-  periodEnd!: string
+  periodEnd?: string
 }
 
 export class PqrRecommendedActionDto {

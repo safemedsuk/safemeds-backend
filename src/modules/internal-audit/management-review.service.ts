@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { ManagementReview, Prisma } from '@prisma/client'
 
 import { newId } from '../../common/id'
@@ -6,6 +11,7 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
 import { CapaService } from './capa.service'
+import { AddManagementReviewAttendeeDto } from './dto/management-review-attendee.dto'
 import { RecordManagementReviewActionsDto } from './dto/record-management-review-actions.dto'
 import { ScheduleManagementReviewDto } from './dto/schedule-management-review.dto'
 import { QualityMetricsService } from './quality-metrics.service'
@@ -78,6 +84,16 @@ export class ManagementReviewService {
           recurringIssueFlagsSnapshot: openFlags,
           nextReviewDueAt: dto.nextReviewDueAt ? new Date(dto.nextReviewDueAt) : null,
           createdBy: actor.sub,
+          attendeeRows: {
+            create: (dto.attendeeRows ?? []).map((row, index) => ({
+              id: newId(),
+              companyId,
+              name: row.name,
+              roleOrOrganisation: row.roleOrOrganisation ?? null,
+              sortOrder: index,
+              createdBy: actor.sub,
+            })),
+          },
         },
       })
 
@@ -161,11 +177,102 @@ export class ManagementReviewService {
   async get(actor: AuthenticatedUser, id: string): Promise<ManagementReview> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
-      const found = await tx.managementReview.findFirst({ where: { id, companyId } })
+      const found = await tx.managementReview.findFirst({
+        where: { id, companyId },
+        include: { attendeeRows: { where: { withdrawnAt: null }, orderBy: { sortOrder: 'asc' } } },
+      })
       if (!found) {
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Management review not found' })
       }
       return found
+    })
+  }
+
+  /**
+   * Pass B (item E) — adds one attendee by name. Every change is audited
+   * (`management_review_attendee_added`); attendee rows are never deleted.
+   */
+  async addAttendee(
+    actor: AuthenticatedUser,
+    reviewId: string,
+    dto: AddManagementReviewAttendeeDto,
+    meta: { ip?: string },
+  ) {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const review = await tx.managementReview.findFirst({ where: { id: reviewId, companyId } })
+      if (!review)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Management review not found' })
+      const existingCount = await tx.managementReviewAttendee.count({
+        where: { companyId, managementReviewId: reviewId },
+      })
+      const attendee = await tx.managementReviewAttendee.create({
+        data: {
+          id: newId(),
+          companyId,
+          managementReviewId: reviewId,
+          name: dto.name,
+          roleOrOrganisation: dto.roleOrOrganisation ?? null,
+          sortOrder: existingCount,
+          createdBy: actor.sub,
+        },
+      })
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'management_review_attendee_added',
+        recordType: MANAGEMENT_REVIEW_RECORD_TYPE,
+        recordId: reviewId,
+        newValue: {
+          attendeeId: attendee.id,
+          name: dto.name,
+          roleOrOrganisation: dto.roleOrOrganisation ?? null,
+        },
+        ip: meta.ip,
+      })
+      return attendee
+    })
+  }
+
+  /** Pass B (item E) — withdraws an attendee entered in error. The row stays, stamped `withdrawnAt`. */
+  async withdrawAttendee(
+    actor: AuthenticatedUser,
+    reviewId: string,
+    attendeeId: string,
+    meta: { ip?: string },
+  ) {
+    const companyId = requireCompany(actor)
+    return this.rls.runAsCompany(companyId, async (tx) => {
+      const attendee = await tx.managementReviewAttendee.findFirst({
+        where: { id: attendeeId, companyId, managementReviewId: reviewId },
+      })
+      if (!attendee)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Attendee not found on this review',
+        })
+      if (attendee.withdrawnAt) {
+        throw new ConflictException({
+          code: 'ALREADY_WITHDRAWN',
+          message: 'This attendee has already been removed',
+        })
+      }
+      const now = new Date()
+      const updated = await tx.managementReviewAttendee.update({
+        where: { id: attendeeId },
+        data: { withdrawnAt: now },
+      })
+      await this.auditService.log(tx, {
+        companyId,
+        actorUserId: actor.sub,
+        action: 'management_review_attendee_withdrawn',
+        recordType: MANAGEMENT_REVIEW_RECORD_TYPE,
+        recordId: reviewId,
+        oldValue: { attendeeId, name: attendee.name },
+        newValue: { withdrawnAt: now.toISOString() },
+        ip: meta.ip,
+      })
+      return updated
     })
   }
 }

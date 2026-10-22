@@ -1,4 +1,9 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { Prisma, Sop, ValidationProtocol, ValidationReport } from '@prisma/client'
 
 import { newId } from '../../common/id'
@@ -102,7 +107,6 @@ export class ValidationService {
     const sop = await this.sopService.create(
       actor,
       {
-        documentNumber: dto.documentNumber,
         title: dto.title,
         documentType: 'protocol',
         productId: dto.productId,
@@ -117,12 +121,15 @@ export class ValidationService {
           companyId,
           title: dto.title,
           validationType: dto.validationType,
-          approach: dto.validationType === 'process' ? dto.approach ?? null : null,
-          gampCategory: dto.validationType === 'computer_system' ? dto.gampCategory ?? null : null,
+          approach: dto.validationType === 'process' ? (dto.approach ?? null) : null,
+          gampCategory:
+            dto.validationType === 'computer_system' ? (dto.gampCategory ?? null) : null,
           productId: dto.productId ?? null,
           equipmentId: dto.equipmentId ?? null,
           protocolDocumentId: sop.id,
-          nextRevalidationDueAt: dto.nextRevalidationDueAt ? new Date(dto.nextRevalidationDueAt) : null,
+          nextRevalidationDueAt: dto.nextRevalidationDueAt
+            ? new Date(dto.nextRevalidationDueAt)
+            : null,
           createdBy: actor.sub,
         },
         include: { protocolDocument: true },
@@ -142,10 +149,16 @@ export class ValidationService {
     })
   }
 
-  async listReportsForProtocol(actor: AuthenticatedUser, protocolId: string): Promise<ValidationReport[]> {
+  async listReportsForProtocol(
+    actor: AuthenticatedUser,
+    protocolId: string,
+  ): Promise<ValidationReport[]> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, (tx) =>
-      tx.validationReport.findMany({ where: { protocolId, companyId }, orderBy: { createdAt: 'desc' } }),
+      tx.validationReport.findMany({
+        where: { protocolId, companyId },
+        orderBy: { createdAt: 'desc' },
+      }),
     )
   }
 
@@ -166,11 +179,14 @@ export class ValidationService {
       if (protocol.protocolDocument.status !== 'effective') {
         throw new ConflictException({
           code: 'PROTOCOL_NOT_EFFECTIVE',
-          message: 'The validation protocol must be an effective controlled document before execution is recorded',
+          message:
+            'The validation protocol must be an effective controlled document before execution is recorded',
         })
       }
       if (dto.reportDocumentId) {
-        const document = await tx.document.findFirst({ where: { id: dto.reportDocumentId, companyId } })
+        const document = await tx.document.findFirst({
+          where: { id: dto.reportDocumentId, companyId },
+        })
         if (!document)
           throw new NotFoundException({ code: 'NOT_FOUND', message: 'Report document not found' })
       }
@@ -180,7 +196,8 @@ export class ValidationService {
           id: newId(),
           companyId,
           protocolId,
-          executionRecords: (dto.executionRecords ?? undefined) as Prisma.InputJsonValue | undefined,
+          executionRecords: (dto.executionRecords ?? undefined) as
+            Prisma.InputJsonValue | undefined,
           reportDocumentId: dto.reportDocumentId ?? null,
           conclusion: dto.conclusion ?? null,
           executedBy: actor.sub,

@@ -26,20 +26,30 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
       return row[key] === value
     })
   }
-  const create = jest.fn().mockImplementation(({ data, include }: { data: T; include?: unknown }) => {
-    rows.set(data.id, { ...defaults, createdAt: new Date(), ...data })
-    const row = rows.get(data.id)!
-    return Promise.resolve(include ? { ...row, protocolDocument: sopByDocumentId.get(row.protocolDocumentId as string) } : row)
-  })
-  const findFirst = jest
+  const create = jest
     .fn()
-    .mockImplementation(({ where, include }: { where: Record<string, unknown>; include?: unknown }) => {
-      const row = [...rows.values()].find((r) => matches(r, where)) ?? null
-      if (!row) return Promise.resolve(null)
+    .mockImplementation(({ data, include }: { data: T; include?: unknown }) => {
+      rows.set(data.id, { ...defaults, createdAt: new Date(), ...data })
+      const row = rows.get(data.id)!
       return Promise.resolve(
-        include ? { ...row, protocolDocument: sopByDocumentId.get(row.protocolDocumentId as string) } : row,
+        include
+          ? { ...row, protocolDocument: sopByDocumentId.get(row.protocolDocumentId as string) }
+          : row,
       )
     })
+  const findFirst = jest
+    .fn()
+    .mockImplementation(
+      ({ where, include }: { where: Record<string, unknown>; include?: unknown }) => {
+        const row = [...rows.values()].find((r) => matches(r, where)) ?? null
+        if (!row) return Promise.resolve(null)
+        return Promise.resolve(
+          include
+            ? { ...row, protocolDocument: sopByDocumentId.get(row.protocolDocumentId as string) }
+            : row,
+        )
+      },
+    )
   const findMany = jest
     .fn()
     .mockImplementation(({ where }: { where?: Record<string, unknown> }) =>
@@ -94,13 +104,12 @@ describe('ValidationService', () => {
       {
         title: 'Cleaning Validation — Line 1',
         validationType: 'cleaning',
-        documentNumber: 'VAL-CLN-001',
       },
       {},
     )
     expect(sopCreate).toHaveBeenCalledWith(
       actor,
-      expect.objectContaining({ documentType: 'protocol', documentNumber: 'VAL-CLN-001' }),
+      expect.objectContaining({ documentType: 'protocol' }),
       {},
     )
     expect(created.protocolDocumentId).toBe('sop-1')
@@ -116,7 +125,6 @@ describe('ValidationService', () => {
         validationType: 'process',
         approach: 'traditional_three_batch',
         gampCategory: '5_custom',
-        documentNumber: 'VAL-PRC-001',
       },
       {},
     )
@@ -130,7 +138,6 @@ describe('ValidationService', () => {
         validationType: 'computer_system',
         approach: 'traditional_three_batch',
         gampCategory: '4_configured',
-        documentNumber: 'VAL-CSV-001',
       },
       {},
     )
@@ -142,23 +149,30 @@ describe('ValidationService', () => {
     const { service } = buildHarness('draft')
     const protocol = await service.createProtocol(
       actor,
-      { title: 'Analytical Method', validationType: 'analytical_method', documentNumber: 'VAL-AM-001' },
+      { title: 'Analytical Method', validationType: 'analytical_method' },
       {},
     )
-    await expect(service.createReport(actor, protocol.id, {}, {})).rejects.toThrow(ConflictException)
+    await expect(service.createReport(actor, protocol.id, {}, {})).rejects.toThrow(
+      ConflictException,
+    )
   })
 
   it('createReport() succeeds once the protocol document is effective, and finalize() sets the conclusion', async () => {
     const { service } = buildHarness('effective')
     const protocol = await service.createProtocol(
       actor,
-      { title: 'Analytical Method', validationType: 'analytical_method', documentNumber: 'VAL-AM-002' },
+      { title: 'Analytical Method', validationType: 'analytical_method' },
       {},
     )
     const report = await service.createReport(actor, protocol.id, { conclusion: 'validated' }, {})
     expect(report.conclusion).toBe('validated')
 
-    const finalized = await service.finalizeReport(actor, report.id, { conclusion: 'conditionally_validated' }, {})
+    const finalized = await service.finalizeReport(
+      actor,
+      report.id,
+      { conclusion: 'conditionally_validated' },
+      {},
+    )
     expect(finalized.conclusion).toBe('conditionally_validated')
   })
 

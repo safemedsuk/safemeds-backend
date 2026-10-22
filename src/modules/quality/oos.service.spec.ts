@@ -29,7 +29,8 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
     if (expected === undefined) return true
     if (expected !== null && typeof expected === 'object' && !(expected instanceof Date)) {
       const ops = expected as Record<string, unknown>
-      if ('startsWith' in ops) return typeof actual === 'string' && actual.startsWith(ops.startsWith as string)
+      if ('startsWith' in ops)
+        return typeof actual === 'string' && actual.startsWith(ops.startsWith as string)
     }
     return actual === expected
   }
@@ -68,8 +69,19 @@ function createTable<T extends Row>(defaults: Partial<T> = {}) {
 }
 
 function buildHarness() {
-  const tables = { oos: createTable({ status: 'phase_1_lab_investigation' }), batch: createTable() }
+  const tables = {
+    oos: createTable({ status: 'phase_1_lab_investigation' }),
+    batch: createTable(),
+    document: createTable(),
+  }
   tables.batch.rows.set('batch-1', { id: 'batch-1', qualityStatus: 'quarantine' })
+  // Pass A2 — findings text needs at least one finding document; the default test fixture attaches one.
+  tables.document.rows.set('doc-finding-1', {
+    id: 'doc-finding-1',
+    companyId: 'company-1',
+    recordType: 'oos_finding',
+    recordId: 'any',
+  })
   const rls = {
     runAsCompany: (_companyId: string, fn: (tx: typeof tables) => unknown) => fn(tables),
   }
@@ -77,12 +89,22 @@ function buildHarness() {
   const auditService = { log: auditLog } as never
   const instantiate = jest.fn().mockResolvedValue(undefined)
   const workflowService = { instantiate } as never
-  const createFrom = jest.fn().mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
-    Promise.resolve({ id: 'capa-1', companyId, sourceRecordType, sourceRecordId, title: input.title }),
-  )
-  const capaService = { createFrom } as never
+  const createFrom = jest
+    .fn()
+    .mockImplementation((_tx, _actor, companyId, sourceRecordType, sourceRecordId, input) =>
+      Promise.resolve({
+        id: 'capa-1',
+        companyId,
+        sourceRecordType,
+        sourceRecordId,
+        title: input.title,
+      }),
+    )
+  const capaService = { createFrom, createAllocatedFrom: createFrom } as never
 
-  const service = new OosService(rls as never, auditService, workflowService, capaService)
+  const service = new OosService(rls as never, auditService, workflowService, capaService, {
+    uploadDirect: jest.fn(),
+  } as never)
   return { service, tables, auditLog, instantiate, createFrom }
 }
 
@@ -118,9 +140,35 @@ describe('OosService', () => {
   })
 
   describe('recordPhase1()', () => {
-    it('records an assignable lab cause', async () => {
-      const { service } = buildHarness()
+    it('refuses findings text when no finding document is attached (Pass A2 item 4b)', async () => {
+      const { service, tables } = buildHarness()
+      tables.document.rows.clear()
       const created = await service.create(actor, baseCreateInput, {})
+      await expect(
+        service.recordPhase1(
+          actor,
+          created.id,
+          { assignableCauseFound: true, findings: 'Text without evidence' },
+          {},
+        ),
+      ).rejects.toMatchObject({ response: { code: 'FINDING_DOCUMENT_REQUIRED' } })
+    })
+
+    it('records an assignable lab cause', async () => {
+      const { service, tables } = buildHarness()
+      tables.document.rows.set('doc-finding-1', {
+        id: 'doc-finding-1',
+        companyId: 'company-1',
+        recordType: 'oos_finding',
+        recordId: 'any',
+      })
+      const created = await service.create(actor, baseCreateInput, {})
+      tables.document.rows.set('doc-finding-2', {
+        id: 'doc-finding-2',
+        companyId: 'company-1',
+        recordType: 'oos_finding',
+        recordId: created.id,
+      })
       const updated = await service.recordPhase1(
         actor,
         created.id,
@@ -159,6 +207,12 @@ describe('OosService', () => {
     it('records Phase 2 findings once in Phase 2, and rejects the batch on batch_rejected impact', async () => {
       const { service, tables } = buildHarness()
       const created = await service.create(actor, baseCreateInput, {})
+      tables.document.rows.set('doc-finding-p2', {
+        id: 'doc-finding-p2',
+        companyId: 'company-1',
+        recordType: 'oos_finding',
+        recordId: created.id,
+      })
       tables.oos.rows.set(created.id, {
         ...tables.oos.rows.get(created.id)!,
         investigationPhase: 'phase_2_manufacturing_investigation',
@@ -204,7 +258,13 @@ describe('OosService', () => {
       const capa = await service.openCapaForOos(
         actor,
         created.id,
-        { title: 'Retrain analyst', correctiveAction: 'Retrain on pipetting SOP' },
+        {
+          rootCause: 'Analyst pipetting technique drift',
+          rootCauseCategory: 'human_error_training',
+          correctiveAction: 'Retrain on pipetting SOP',
+          ownerUserId: 'owner-user',
+          correctiveActionDueDate: '2026-12-01',
+        },
         {},
       )
       expect(capa.sourceRecordType).toBe('oos')
@@ -214,7 +274,7 @@ describe('OosService', () => {
         'company-1',
         'oos',
         created.id,
-        expect.objectContaining({ title: 'Retrain analyst' }),
+        expect.objectContaining({ rootCauseCategory: 'human_error_training' }),
         {},
       )
     })

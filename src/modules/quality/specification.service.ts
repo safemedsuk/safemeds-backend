@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -14,6 +15,9 @@ import { AuditService } from '../audit/audit.service'
 import { CreateSpecificationDto } from './dto/create-specification.dto'
 import { ListSpecificationsQueryDto } from './dto/list-specifications-query.dto'
 import { UpdateSpecificationDto } from './dto/update-specification.dto'
+
+/** Specification types that must link to a catalogue product. Raw materials, packaging and APIs link to a supplier instead. */
+export const PRODUCT_REQUIRED_TYPES = ['finished_product', 'in_process'] as const
 
 export interface RequestMeta {
   ip?: string
@@ -103,6 +107,31 @@ export class SpecificationService {
   ): Promise<SpecificationWithParameters> {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
+      // Phase 2 Pass C — a finished-product or in-process specification is linked to a
+      // product from this company's catalogue. The link is verified here, not trusted.
+      if (dto.productId) {
+        const product = await tx.product.findFirst({
+          where: { id: dto.productId, companyId },
+          select: { id: true },
+        })
+        if (!product) {
+          throw new BadRequestException({
+            code: 'PRODUCT_NOT_FOUND',
+            message: 'Choose a product from your company catalogue.',
+          })
+        }
+      } else if (
+        PRODUCT_REQUIRED_TYPES.includes(
+          dto.specificationType as (typeof PRODUCT_REQUIRED_TYPES)[number],
+        )
+      ) {
+        throw new BadRequestException({
+          code: 'PRODUCT_REQUIRED',
+          message:
+            'A finished-product or in-process specification must be linked to a product from the catalogue.',
+        })
+      }
+
       const duplicate = await tx.specification.findFirst({
         where: { companyId, specificationNumber: dto.specificationNumber },
       })

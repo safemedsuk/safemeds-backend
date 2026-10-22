@@ -21,6 +21,19 @@ export class SopController {
     return this.sopService.list(user, query)
   }
 
+  /**
+   * Pass A: the minimal, name-only active-user list a document owner needs
+   * to assign readers. Deliberately NOT `GET /users` (gated `users.view`,
+   * which a QUALITY_ASSOCIATE correctly does not hold). Gated on the same
+   * permission as assigning readers, so anyone who can assign can see who
+   * they may assign to, and nobody else.
+   */
+  @RequirePermissions('quality.manage_documents')
+  @Get('assignable-readers')
+  assignableReaders(@CurrentUser() user: AuthenticatedUser) {
+    return this.sopService.listAssignableReaders(user)
+  }
+
   @RequirePermissions('quality.view_all')
   @Get(':id')
   get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {

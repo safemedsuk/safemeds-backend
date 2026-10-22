@@ -90,7 +90,11 @@ export class RecallPortalService {
         where: { id: dto.stakeholderId, companyId },
       })
       if (!stakeholder) {
-        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Stakeholder not found' })
+        throw new NotFoundException({
+          code: 'STAKEHOLDER_NOT_FOUND',
+          message:
+            'That stakeholder is not in your stakeholder list. Pick one from the list, or create it first.',
+        })
       }
 
       const created = await tx.recallPortalLink.create({
@@ -124,8 +128,12 @@ export class RecallPortalService {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const existing = await tx.recallPortalLink.findFirst({ where: { id: linkId, companyId } })
-      if (!existing) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Portal link not found' })
-      const updated = await tx.recallPortalLink.update({ where: { id: linkId }, data: { revoked: true } })
+      if (!existing)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Portal link not found' })
+      const updated = await tx.recallPortalLink.update({
+        where: { id: linkId },
+        data: { revoked: true },
+      })
       await this.auditService.log(tx, {
         companyId,
         actorUserId: actor.sub,
@@ -149,7 +157,10 @@ export class RecallPortalService {
         },
       })
       if (!link || link.revoked || link.expiresAt < new Date()) {
-        throw new NotFoundException({ code: 'INVALID_LINK', message: 'This link is invalid or has expired' })
+        throw new NotFoundException({
+          code: 'INVALID_LINK',
+          message: 'This link is invalid or has expired',
+        })
       }
       return link
     })
@@ -209,7 +220,8 @@ export class RecallPortalService {
     const companyId = requireCompany(actor)
     return this.rls.runAsCompany(companyId, async (tx) => {
       const link = await tx.recallPortalLink.findFirst({ where: { id: linkId, companyId } })
-      if (!link) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Portal link not found' })
+      if (!link)
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Portal link not found' })
       return tx.recallPortalAction.findMany({
         where: { linkId },
         orderBy: { serverTimestamp: 'desc' },

@@ -136,7 +136,8 @@ export const PERMISSIONS: PermissionSeed[] = [
   // `quality.approve_recall_exception` pair.
   {
     key: 'quality.log_recall',
-    description: 'Draft and log day-to-day recall case management (countries, scope, distribution, portal, quarantine/returns, reconciliation)',
+    description:
+      'Draft and log day-to-day recall case management (countries, scope, distribution, portal, quarantine/returns, reconciliation)',
   },
   // QualCloud (Phase 13) Stage 10.5 — two deliberately narrower,
   // sign-off-shaped actions carved out of the broader
@@ -194,7 +195,7 @@ export const PERMISSIONS: PermissionSeed[] = [
   // `quality.manage_suppliers`, but a distinct one.
   {
     key: 'quality.approve_suppliers',
-    description: 'Approve or suspend/disqualify a supplier\'s approval status',
+    description: "Approve or suspend/disqualify a supplier's approval status",
   },
   // QualCloud (Phase 13) Stage 13 — Product Quality Review & Quality
   // Risk Management. `quality.view_pqr` (pre-existing since Stage 0.4)
@@ -214,6 +215,14 @@ export const PERMISSIONS: PermissionSeed[] = [
   {
     key: 'quality.manage_waste_disposal',
     description: 'Log pharmaceutical waste disposal records and sign as a destruction witness',
+  },
+  // QualCloud Phase 1 Pass B (item B7) — closing a 7-step waste disposal case
+  // is a manager-level action (Second Schedule evidence set is complete and
+  // the case is archived). Granted to QUALITY_MANAGER only, below.
+  {
+    key: 'quality.close_waste_disposal',
+    description:
+      'Close a pharmaceutical waste disposal case once all evidence (steps 2, 4, 5, 6) is attached',
   },
   // QualCloud (Phase 13) Stage 16 — Falsified & Substandard Product
   // Handling. Same symmetric grant as `quality.manage_waste_disposal`
@@ -334,7 +343,8 @@ export const PERMISSIONS: PermissionSeed[] = [
   // variation/renewal filing authority.
   {
     key: 'regulatory.manage_retentions',
-    description: "Log a registration's annual retention (invoice, proof of payment) and receive its certificate",
+    description:
+      "Log a registration's annual retention (invoice, proof of payment) and receive its certificate",
   },
 
   // ── Tenant: cross-domain ─────────────────────────────────────────────────
@@ -829,6 +839,7 @@ export const ROLES: RoleSeed[] = [
       'quality.manage_pqr',
       // QualCloud (Phase 13) Stage 15/16.
       'quality.manage_waste_disposal',
+      'quality.close_waste_disposal',
       'quality.manage_falsified_reports',
       'quality.manage_environmental_monitoring',
       'quality.manage_stability',

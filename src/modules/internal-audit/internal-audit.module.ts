@@ -7,6 +7,7 @@ import { EnvConfig } from '../../config/env.validation'
 import { AuditModule } from '../audit/audit.module'
 import { DocumentsModule } from '../documents/documents.module'
 import { NotificationsModule } from '../notifications/notifications.module'
+import { RolesModule } from '../roles/roles.module'
 import { TasksModule } from '../tasks/tasks.module'
 import { CapaController } from './capa.controller'
 import { CapaService } from './capa.service'
@@ -72,6 +73,7 @@ function redisConnectionFactory(configService: ConfigService<EnvConfig, true>) {
     TasksModule,
     NotificationsModule,
     DocumentsModule,
+    RolesModule,
     BullModule.registerQueueAsync({
       name: CAPA_OVERDUE_QUEUE,
       inject: [ConfigService],
