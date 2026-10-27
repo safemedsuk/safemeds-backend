@@ -104,6 +104,8 @@ export class RegQueryReminderService {
           category: overdue ? 'deadline_approaching' : 'deadline_approaching',
           title,
           body,
+          type: 'reg_query_reminder',
+          params: { overdue, dueLabel, queryPreview },
           recordType: REG_QUERY_REMINDER_RECORD_TYPE,
           recordId: query.id,
         })

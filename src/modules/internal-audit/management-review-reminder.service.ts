@@ -33,7 +33,9 @@ export class ManagementReviewReminderService {
   ) {}
 
   async scanAndRemind(): Promise<ManagementReviewReminderResult> {
-    const companies = await this.rls.runWithSystemAccess((tx) => tx.company.findMany({ select: { id: true } }))
+    const companies = await this.rls.runWithSystemAccess((tx) =>
+      tx.company.findMany({ select: { id: true } }),
+    )
     const now = new Date()
     let remindersSent = 0
 
@@ -46,8 +48,8 @@ export class ManagementReviewReminderService {
       )
 
       const dueAt = latest
-        ? latest.nextReviewDueAt ??
-          new Date(latest.reviewDate.getTime() + DEFAULT_CADENCE_DAYS * 24 * 60 * 60 * 1000)
+        ? (latest.nextReviewDueAt ??
+          new Date(latest.reviewDate.getTime() + DEFAULT_CADENCE_DAYS * 24 * 60 * 60 * 1000))
         : now
 
       if (dueAt.getTime() > now.getTime()) continue
@@ -75,6 +77,8 @@ export class ManagementReviewReminderService {
           category: 'deadline_approaching',
           title,
           body: 'Schedule the next management review from Quality → Metrics & Trends.',
+          type: 'management_review_due',
+          params: {},
           recordType: MANAGEMENT_REVIEW_RECORD_TYPE,
           recordId: company.id,
         })

@@ -3,6 +3,12 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { Notification, NotificationCategory, NotificationPreference } from '@prisma/client'
 import { Queue } from 'bullmq'
 
+import { resolveLocale } from '../../common/i18n/locale'
+import {
+  NotificationParams,
+  NotificationType,
+  resolveNotificationContent,
+} from '../../common/i18n/notification-content'
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { RlsService } from '../../common/rls/rls.service'
@@ -15,10 +21,23 @@ export interface CreateNotificationInput {
   companyId: string
   userId: string
   category: NotificationCategory
+  /** English fallback — always used verbatim if `type` is omitted, or (defensively) if `type` is ever a value `resolveNotificationContent()` doesn't recognize. */
   title: string
   body?: string
   recordType?: string
   recordId?: string
+  /**
+   * todo-i18n.md decision 6 — when given alongside `params`, the real
+   * title/body written to this row (and reused for the matching
+   * notification email) are resolved in the *recipient's own*
+   * `preferredLocale` via `resolveNotificationContent()`, overriding
+   * `title`/`body` above entirely. Every call site is expected to pass
+   * this eventually; `title`/`body` stay required so a call site that
+   * hasn't been converted yet (or a genuinely new one) still produces
+   * a correct, if English-only, notification.
+   */
+  type?: NotificationType
+  params?: NotificationParams
   /** Only sent if the recipient's preference for this category allows it — see `emailEnabledFor()`. */
   email?: { to: string; actionUrl?: string }
 }
@@ -65,6 +84,24 @@ export class NotificationsService {
   ) {}
 
   async create(input: CreateNotificationInput): Promise<Notification> {
+    // Resolved once, up front, since both the in-app row and its
+    // matching email (if any) need the same recipient-locale-aware
+    // title/body — fetching the recipient's own `preferredLocale`
+    // here (rather than only when an email is actually queued) is
+    // what lets the in-app notification itself be correct even for a
+    // user who has email notifications for this category turned off.
+    const recipient = await this.prisma.user.findUnique({
+      where: { id: input.userId },
+      select: { preferredLocale: true },
+    })
+    const locale = resolveLocale(recipient?.preferredLocale)
+    const resolved =
+      input.type && input.params
+        ? resolveNotificationContent(input.type, locale, input.params)
+        : null
+    const title = resolved?.title ?? input.title
+    const body = resolved?.body ?? input.body
+
     const created = await this.rls.runAsCompany(input.companyId, (tx) =>
       tx.notification.create({
         data: {
@@ -72,8 +109,8 @@ export class NotificationsService {
           companyId: input.companyId,
           userId: input.userId,
           category: input.category,
-          title: input.title,
-          body: input.body,
+          title,
+          body,
           recordType: input.recordType,
           recordId: input.recordId,
         },
@@ -85,10 +122,11 @@ export class NotificationsService {
         'send',
         {
           to: input.email.to,
-          subject: input.title,
-          bodyText: input.body ?? input.title,
+          subject: title,
+          bodyText: body ?? title,
           actionUrl: input.email.actionUrl,
           recipientContext: 'account',
+          locale,
         },
         { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
       )

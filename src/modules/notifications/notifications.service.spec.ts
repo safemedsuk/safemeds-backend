@@ -95,13 +95,24 @@ function buildHarness() {
   }
 
   const preferenceFindUnique = jest.fn().mockResolvedValue(null)
-  const prisma = { notificationPreference: { findUnique: preferenceFindUnique } }
+  const userFindUnique = jest.fn().mockResolvedValue({ preferredLocale: 'en' })
+  const prisma = {
+    notificationPreference: { findUnique: preferenceFindUnique },
+    user: { findUnique: userFindUnique },
+  }
 
   const emailAdd = jest.fn().mockResolvedValue(undefined)
   const emailQueue = { add: emailAdd }
 
   const service = new NotificationsService(rls as never, prisma as never, emailQueue as never)
-  return { service, notifications, preferenceFindUnique, emailAdd, notificationFindMany }
+  return {
+    service,
+    notifications,
+    preferenceFindUnique,
+    userFindUnique,
+    emailAdd,
+    notificationFindMany,
+  }
 }
 
 describe('NotificationsService', () => {

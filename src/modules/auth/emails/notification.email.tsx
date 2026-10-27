@@ -1,6 +1,8 @@
 import { Button, Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { EmailLayout } from './layout';
 
 interface NotificationEmailProps {
@@ -15,6 +17,8 @@ interface NotificationEmailProps {
   eyebrow?: string;
   recipientEmail?: string;
   recipientContext?: 'account' | 'external';
+  /** Defaults to English — only ever affects this wrapper's own default `actionLabel`/`eyebrow`/layout chrome; `heading`/`bodyText`/`trailingText` are supplied by the caller already resolved to the right locale (see `MailService`'s own doc comments on which callers do this today vs. which still bake in English). */
+  locale?: SupportedLocale;
 }
 
 /**
@@ -41,13 +45,23 @@ export function NotificationEmail({
   listItems,
   trailingText,
   actionUrl,
-  actionLabel = 'Open in SafeMeds',
-  eyebrow = 'Notification',
+  actionLabel,
+  eyebrow,
   recipientEmail,
   recipientContext = 'account',
+  locale = DEFAULT_LOCALE,
 }: NotificationEmailProps): React.ReactElement {
+  const resolvedActionLabel = actionLabel ?? t(locale, 'notificationGeneric.actionLabelDefault');
+  const resolvedEyebrow = eyebrow ?? t(locale, 'notificationGeneric.eyebrowDefault');
   return (
-    <EmailLayout previewText={heading} heading={heading} eyebrow={eyebrow} recipientEmail={recipientEmail} recipientContext={recipientContext}>
+    <EmailLayout
+      previewText={heading}
+      heading={heading}
+      eyebrow={resolvedEyebrow}
+      recipientEmail={recipientEmail}
+      recipientContext={recipientContext}
+      locale={locale}
+    >
       <Text style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 16px', whiteSpace: 'pre-line' }}>{bodyText}</Text>
       {listItems && listItems.length > 0 && (
         <ul style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 20px', paddingLeft: '20px' }}>
@@ -72,7 +86,7 @@ export function NotificationEmail({
             display: 'inline-block',
           }}
         >
-          {actionLabel}
+          {resolvedActionLabel}
         </Button>
       )}
     </EmailLayout>

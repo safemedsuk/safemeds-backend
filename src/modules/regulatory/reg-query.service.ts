@@ -203,7 +203,10 @@ export class RegQueryService {
     const companyId = requireCompany(actor)
 
     const dossier = await this.rls.runAsCompany(companyId, (tx) =>
-      tx.regDossier.findFirst({ where: { id: dossierId, companyId }, include: { authority: true } }),
+      tx.regDossier.findFirst({
+        where: { id: dossierId, companyId },
+        include: { authority: true },
+      }),
     )
     if (!dossier) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Dossier not found' })
 
@@ -367,16 +370,21 @@ export class RegQueryService {
     })
 
     if (ownerUserId) {
+      const dueDate = updated.responseDueDate
+        ? updated.responseDueDate.toISOString().slice(0, 10)
+        : undefined
       await this.notificationsService.create({
         companyId,
         userId: ownerUserId,
         category: 'workflow_update',
         title: 'A regulator query was assigned to you',
         body: `You've been made the owner of a regulator query. ${
-          updated.responseDueDate
-            ? `The regulator's stated deadline is ${updated.responseDueDate.toISOString().slice(0, 10)}.`
+          dueDate
+            ? `The regulator's stated deadline is ${dueDate}.`
             : 'No response due date has been recorded yet.'
         }`,
+        type: 'reg_query_assigned',
+        params: { dueDate },
         recordType: REG_QUERY_RECORD_TYPE,
         recordId: queryId,
       })
@@ -613,7 +621,10 @@ export class RegQueryService {
     const existing = await this.findQueryOrThrow(companyId, dossierId, queryId)
 
     if (existing.status === 'closed') {
-      throw new ConflictException({ code: 'ALREADY_CLOSED', message: 'This query is already closed' })
+      throw new ConflictException({
+        code: 'ALREADY_CLOSED',
+        message: 'This query is already closed',
+      })
     }
     if (existing.status !== 'responded') {
       throw new ConflictException({

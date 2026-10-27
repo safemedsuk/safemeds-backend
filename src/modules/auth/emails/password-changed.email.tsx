@@ -1,27 +1,32 @@
 import { Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { EmailLayout } from './layout';
 
 interface PasswordChangedEmailProps {
   recipientEmail: string;
   occurredAt: string;
+  locale?: SupportedLocale;
 }
 
 export function PasswordChangedEmail({
   recipientEmail,
   occurredAt,
+  locale = DEFAULT_LOCALE,
 }: PasswordChangedEmailProps): React.ReactElement {
   return (
     <EmailLayout
-      previewText="Your SafeMeds password was changed"
-      heading="Your password was changed"
-      eyebrow="Security alert"
+      previewText={t(locale, 'passwordChanged.previewText')}
+      heading={t(locale, 'passwordChanged.heading')}
+      eyebrow={t(locale, 'passwordChanged.eyebrow')}
       recipientEmail={recipientEmail}
+      locale={locale}
     >
       <Text style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 16px' }}>
-        The password for your SafeMeds account was changed on <strong>{occurredAt}</strong>. All other sessions
-        and devices have been signed out as a precaution.
+        {t(locale, 'passwordChanged.bodyPrefix')}
+        <strong>{occurredAt}</strong>. {t(locale, 'passwordChanged.bodySuffix')}
       </Text>
       <table role="presentation" width="100%" cellPadding={0} cellSpacing={0}>
         <tbody>
@@ -35,8 +40,7 @@ export function PasswordChangedEmail({
               }}
             >
               <Text style={{ fontSize: '13px', color: '#78350f', margin: 0, lineHeight: '20px' }}>
-                If this wasn't you, contact your company administrator immediately — your account may be
-                compromised.
+                {t(locale, 'passwordChanged.warning')}
               </Text>
             </td>
           </tr>

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config'
 import { Prisma, User } from '@prisma/client'
 import { randomBytes } from 'crypto'
 
+import { resolveLocale } from '../../../common/i18n/locale'
 import { newId } from '../../../common/id'
 import { AuthenticatedUser } from '../../../common/interfaces/authenticated-user.interface'
 import { RlsService } from '../../../common/rls/rls.service'
@@ -87,14 +88,19 @@ export class PasswordLifecycleService {
     }
 
     const resetUrl = `${this.configService.get('FRONTEND_URL', { infer: true })}/reset-password?token=${plaintext}`
-    await this.mailService.sendPasswordResetLink(user.email, resetUrl, ttlMinutes)
+    await this.mailService.sendPasswordResetLink(
+      user.email,
+      resetUrl,
+      ttlMinutes,
+      resolveLocale(user.preferredLocale),
+    )
   }
 
   /** Runs under `runWithSystemAccess` — a reset token, like the email above, is what establishes identity here; there is no company to scope by yet. */
   async resetPassword(dto: ResetPasswordDto, meta: RequestMeta): Promise<void> {
     const tokenHash = hashToken(dto.token)
 
-    const { email, userId } = await this.rls.runWithSystemAccess(async (tx) => {
+    const { email, userId, preferredLocale } = await this.rls.runWithSystemAccess(async (tx) => {
       const authToken = await tx.authToken.findUnique({
         where: { tokenHash },
         include: { user: { include: { company: true } } },
@@ -139,11 +145,19 @@ export class PasswordLifecycleService {
         ip: meta.ip,
       })
 
-      return { email: authToken.user.email, userId: authToken.userId }
+      return {
+        email: authToken.user.email,
+        userId: authToken.userId,
+        preferredLocale: authToken.user.preferredLocale,
+      }
     })
 
     await this.tokenService.revokeAllForUser(userId)
-    await this.mailService.sendPasswordChangedConfirmation(email, new Date())
+    await this.mailService.sendPasswordChangedConfirmation(
+      email,
+      new Date(),
+      resolveLocale(preferredLocale),
+    )
   }
 
   /**
@@ -204,7 +218,11 @@ export class PasswordLifecycleService {
       : await this.rls.runWithSystemAccess(doChange)
 
     await this.tokenService.revokeAllForUserExcept(actor.sub, currentTokenHash)
-    await this.mailService.sendPasswordChangedConfirmation(updated.email, new Date())
+    await this.mailService.sendPasswordChangedConfirmation(
+      updated.email,
+      new Date(),
+      resolveLocale(updated.preferredLocale),
+    )
 
     return updated
   }

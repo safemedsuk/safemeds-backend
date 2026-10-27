@@ -55,6 +55,7 @@ export class RegDeadlineTaskEscalationNotifier implements RegDeadlineEscalationN
       deadline,
       'due_soon',
       `${describeRecordType(deadline.recordType)} approaching (${threshold})`,
+      threshold,
     )
   }
 
@@ -70,6 +71,7 @@ export class RegDeadlineTaskEscalationNotifier implements RegDeadlineEscalationN
     deadline: RegDeadline,
     urgency: 'due_soon' | 'overdue',
     headline: string,
+    threshold?: string,
   ): Promise<void> {
     const title = `${headline}: ${deadline.recordType} due ${deadline.dueAt.toISOString().slice(0, 10)}`
 
@@ -85,6 +87,8 @@ export class RegDeadlineTaskEscalationNotifier implements RegDeadlineEscalationN
     const recipients = await this.resolveRecipients(deadline.companyId)
     const appUrl = this.configService.get('FRONTEND_URL', { infer: true })
     const category = urgency === 'overdue' ? 'deadline_breached' : 'deadline_approaching'
+    const dueDate = deadline.dueAt.toISOString().slice(0, 10)
+    const recordTypeLabel = describeRecordType(deadline.recordType)
 
     for (const recipient of recipients) {
       await this.notificationsService.create({
@@ -93,6 +97,15 @@ export class RegDeadlineTaskEscalationNotifier implements RegDeadlineEscalationN
         category,
         title,
         body: `${title}. Record: ${deadline.recordType}/${deadline.recordId}.`,
+        type: 'reg_deadline_escalation',
+        params: {
+          overdue: urgency === 'overdue',
+          recordTypeLabel,
+          recordType: deadline.recordType,
+          recordId: deadline.recordId,
+          dueDate,
+          threshold,
+        },
         recordType: deadline.recordType,
         recordId: deadline.recordId,
         email: { to: recipient.email, actionUrl: `${appUrl}/tasks` },

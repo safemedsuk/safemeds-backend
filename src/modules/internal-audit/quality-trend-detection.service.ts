@@ -140,6 +140,12 @@ export class QualityTrendDetectionService {
               category: 'workflow_update',
               title: `Quality trend detected: ${category}`,
               body: `${capaIds.length} CAPAs sharing root cause "${category}" have been opened within the last ${windowDays} days.`,
+              type: 'quality_trend_detected',
+              params: {
+                category,
+                capaCount: String(capaIds.length),
+                windowDays: String(windowDays),
+              },
               recordType: 'quality_trend_flag',
               recordId: flagId,
             })
@@ -151,7 +157,8 @@ export class QualityTrendDetectionService {
       // cleared — mark it resolved rather than deleting it, matching
       // this schema's "never delete, deactivate/resolve" convention.
       for (const flag of existingFlags) {
-        const stillTrending = (capasByCategory.get(flag.rootCauseCategory)?.length ?? 0) >= threshold
+        const stillTrending =
+          (capasByCategory.get(flag.rootCauseCategory)?.length ?? 0) >= threshold
         if (stillTrending) continue
         await this.rls.runAsCompany(company.id, async (tx) => {
           await tx.qualityTrendFlag.update({ where: { id: flag.id }, data: { status: 'resolved' } })

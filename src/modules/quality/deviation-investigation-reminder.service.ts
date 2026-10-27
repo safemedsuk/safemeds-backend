@@ -120,6 +120,13 @@ export class DeviationInvestigationReminderService {
           category: target === 'overdue' ? 'deadline_breached' : 'deadline_approaching',
           title,
           body,
+          type: 'deviation_investigation',
+          params: {
+            overdue: target === 'overdue',
+            deviationNumber: deviation.deviationNumber,
+            deviationTitle: deviation.title,
+            dueDate: dueAt.toISOString().slice(0, 10),
+          },
           recordType: QUALITY_DEVIATION_RECORD_TYPE,
           recordId: deviation.id,
           email: user ? { to: user.email } : undefined,

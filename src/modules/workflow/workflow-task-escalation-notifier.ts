@@ -31,7 +31,12 @@ export class WorkflowTaskEscalationNotifier implements DeadlineEscalationNotifie
     // escalation to 'overdue' is reserved for a real breach (onBreach
     // below); 72h vs 24h is preserved in the notification title/body
     // text so a human still knows how much runway is actually left.
-    await this.escalate(deadline, 'due_soon', `Reporting deadline approaching (${threshold})`)
+    await this.escalate(
+      deadline,
+      'due_soon',
+      `Reporting deadline approaching (${threshold})`,
+      threshold,
+    )
   }
 
   async onBreach(deadline: Deadline): Promise<void> {
@@ -42,6 +47,7 @@ export class WorkflowTaskEscalationNotifier implements DeadlineEscalationNotifie
     deadline: Deadline,
     urgency: 'due_soon' | 'overdue',
     headline: string,
+    threshold?: string,
   ): Promise<void> {
     const title = `${headline}: ${deadline.recordType} due ${deadline.dueAt.toISOString().slice(0, 10)}`
 
@@ -57,6 +63,7 @@ export class WorkflowTaskEscalationNotifier implements DeadlineEscalationNotifie
     const recipients = await this.resolveRecipients(deadline)
     const appUrl = this.configService.get('FRONTEND_URL', { infer: true })
     const category = urgency === 'overdue' ? 'deadline_breached' : 'deadline_approaching'
+    const dueDate = deadline.dueAt.toISOString().slice(0, 10)
 
     for (const recipient of recipients) {
       await this.notificationsService.create({
@@ -65,6 +72,14 @@ export class WorkflowTaskEscalationNotifier implements DeadlineEscalationNotifie
         category,
         title,
         body: `${title}. Record: ${deadline.recordType}/${deadline.recordId}.`,
+        type: 'workflow_deadline_escalation',
+        params: {
+          overdue: urgency === 'overdue',
+          recordType: deadline.recordType,
+          recordId: deadline.recordId,
+          dueDate,
+          threshold,
+        },
         recordType: deadline.recordType,
         recordId: deadline.recordId,
         email: { to: recipient.email, actionUrl: `${appUrl}/tasks` },

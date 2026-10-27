@@ -75,6 +75,12 @@ export class RegRenewalReminderService {
           category: 'deadline_approaching',
           title,
           body: `${title}. Start the renewal from Master Data → Registrations before it lapses.`,
+          type: 'renewal_due',
+          params: {
+            brandName: registration.product.brandName,
+            registrationNumber: registration.registrationNumber,
+            expiresOn: registration.expiresOn.toISOString().slice(0, 10),
+          },
           recordType: 'product_registration',
           recordId: registration.id,
         })

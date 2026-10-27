@@ -131,6 +131,8 @@ export class SupplierBiennialReviewReminderService {
           category: overdue ? 'deadline_breached' : 'deadline_approaching',
           title,
           body,
+          type: 'supplier_review',
+          params: { overdue, supplierName: supplier.name, dueDate },
           recordType: SUPPLIER_RECORD_TYPE,
           recordId: supplier.id,
           email: user ? { to: user.email } : undefined,

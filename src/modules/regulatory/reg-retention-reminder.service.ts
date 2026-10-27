@@ -83,6 +83,12 @@ export class RegRetentionReminderService {
           category: 'deadline_approaching',
           title,
           body: `${title}. Log the invoice and proof of payment before 31 December ${year} to keep this registration in good standing.`,
+          type: 'retention_due',
+          params: {
+            year: String(year),
+            brandName: registration.product.brandName,
+            registrationNumber: registration.registrationNumber,
+          },
           recordType: 'product_registration',
           recordId: registration.id,
         })
@@ -99,6 +105,9 @@ export class RegRetentionReminderService {
       }
     }
 
-    return { registrationsScanned: activeRegistrations.length, remindersSent: dueRegistrations.length }
+    return {
+      registrationsScanned: activeRegistrations.length,
+      remindersSent: dueRegistrations.length,
+    }
   }
 }

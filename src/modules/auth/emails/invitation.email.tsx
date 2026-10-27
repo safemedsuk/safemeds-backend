@@ -1,6 +1,8 @@
 import { Button, Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { EmailLayout } from './layout';
 
 interface InvitationEmailProps {
@@ -10,6 +12,7 @@ interface InvitationEmailProps {
   acceptUrl: string;
   expiresInDays: number;
   recipientEmail: string;
+  locale?: SupportedLocale;
 }
 
 export function InvitationEmail({
@@ -19,17 +22,20 @@ export function InvitationEmail({
   acceptUrl,
   expiresInDays,
   recipientEmail,
+  locale = DEFAULT_LOCALE,
 }: InvitationEmailProps): React.ReactElement {
+  const isPlural = roleLabels.length > 1;
   return (
     <EmailLayout
-      previewText={`${inviterName} invited you to join ${companyName} on SafeMeds`}
-      heading="You've been invited to SafeMeds"
-      eyebrow="Team invitation"
+      previewText={t(locale, 'invitation.previewText', { inviterName, companyName })}
+      heading={t(locale, 'invitation.heading')}
+      eyebrow={t(locale, 'invitation.eyebrow')}
       recipientEmail={recipientEmail}
+      locale={locale}
     >
       <Text style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 16px' }}>
-        <strong>{inviterName}</strong> has invited you to join <strong>{companyName}</strong> on SafeMeds with the
-        following role{roleLabels.length > 1 ? 's' : ''}:
+        <strong>{inviterName}</strong> {t(locale, isPlural ? 'invitation.bodyPluralMid' : 'invitation.bodySingularMid')} <strong>{companyName}</strong>{' '}
+        {t(locale, isPlural ? 'invitation.bodyPluralSuffix' : 'invitation.bodySingularSuffix')}
       </Text>
       <table role="presentation" cellPadding={0} cellSpacing={0} style={{ margin: '0 0 20px' }}>
         <tbody>
@@ -70,11 +76,10 @@ export function InvitationEmail({
           display: 'inline-block',
         }}
       >
-        Accept invitation
+        {t(locale, 'invitation.button')}
       </Button>
       <Text style={{ fontSize: '13px', color: '#71717a', margin: '20px 0 0' }}>
-        This invitation expires in {expiresInDays} days. If you weren't expecting this, you can safely ignore this
-        email.
+        {t(locale, 'invitation.footer', { days: String(expiresInDays) })}
       </Text>
     </EmailLayout>
   );

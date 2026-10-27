@@ -1,25 +1,29 @@
 import { Button, Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { EmailLayout } from './layout';
 
 interface ApprovalEmailProps {
   companyName: string;
   loginUrl: string;
   recipientEmail: string;
+  locale?: SupportedLocale;
 }
 
-export function ApprovalEmail({ companyName, loginUrl, recipientEmail }: ApprovalEmailProps): React.ReactElement {
+export function ApprovalEmail({ companyName, loginUrl, recipientEmail, locale = DEFAULT_LOCALE }: ApprovalEmailProps): React.ReactElement {
   return (
     <EmailLayout
-      previewText="Your SafeMeds registration has been approved"
-      heading="Registration approved"
-      eyebrow="Account approved"
+      previewText={t(locale, 'approval.previewText')}
+      heading={t(locale, 'approval.heading')}
+      eyebrow={t(locale, 'approval.eyebrow')}
       recipientEmail={recipientEmail}
+      locale={locale}
     >
       <Text style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 20px' }}>
-        Good news — <strong>{companyName}</strong> has been reviewed and approved on SafeMeds. You can now sign in
-        with the administrator account you created during registration.
+        {t(locale, 'approval.bodyPrefix')}
+        <strong>{companyName}</strong> {t(locale, 'approval.bodySuffix')}
       </Text>
       <Button
         href={loginUrl}
@@ -33,11 +37,10 @@ export function ApprovalEmail({ companyName, loginUrl, recipientEmail }: Approva
           display: 'inline-block',
         }}
       >
-        Sign in to SafeMeds
+        {t(locale, 'approval.button')}
       </Button>
       <Text style={{ fontSize: '13px', color: '#71717a', margin: '20px 0 0' }}>
-        As a first step, we recommend enabling multi-factor authentication from Settings → Security to add an
-        extra layer of protection to your account.
+        {t(locale, 'approval.footer')}
       </Text>
     </EmailLayout>
   );

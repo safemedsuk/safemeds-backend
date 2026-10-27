@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config'
 import { Invitation, Prisma } from '@prisma/client'
 import { randomBytes, randomInt } from 'crypto'
 
+import { resolveLocale } from '../../common/i18n/locale'
 import { newId } from '../../common/id'
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface'
 import { paginate, PaginatedResult } from '../../common/pagination'
@@ -377,38 +378,50 @@ export class InvitationsService {
 
   /** Public, pre-authentication — system access. */
   async resendVerificationCode(email: string): Promise<void> {
-    const { userEmail, code, ttlMinutes } = await this.rls.runWithSystemAccess(async (tx) => {
-      const user = await tx.user.findUnique({ where: { email } })
-      if (!user) {
-        throw new NotFoundException({
-          code: 'NOT_FOUND',
-          message: 'No account found for this email address',
+    const { userEmail, code, ttlMinutes, preferredLocale } = await this.rls.runWithSystemAccess(
+      async (tx) => {
+        const user = await tx.user.findUnique({ where: { email } })
+        if (!user) {
+          throw new NotFoundException({
+            code: 'NOT_FOUND',
+            message: 'No account found for this email address',
+          })
+        }
+
+        const codeTtlMinutes = this.configService.get('EMAIL_VERIFICATION_CODE_TTL_MINUTES', {
+          infer: true,
         })
-      }
+        const verificationCode = generateNumericCode()
 
-      const codeTtlMinutes = this.configService.get('EMAIL_VERIFICATION_CODE_TTL_MINUTES', {
-        infer: true,
-      })
-      const verificationCode = generateNumericCode()
+        await tx.authToken.updateMany({
+          where: { userId: user.id, purpose: 'email_verification', consumedAt: null },
+          data: { consumedAt: new Date() },
+        })
+        await tx.authToken.create({
+          data: {
+            id: newId(),
+            userId: user.id,
+            purpose: 'email_verification',
+            tokenHash: hashToken(verificationCode),
+            expiresAt: new Date(Date.now() + codeTtlMinutes * 60 * 1000),
+          },
+        })
 
-      await tx.authToken.updateMany({
-        where: { userId: user.id, purpose: 'email_verification', consumedAt: null },
-        data: { consumedAt: new Date() },
-      })
-      await tx.authToken.create({
-        data: {
-          id: newId(),
-          userId: user.id,
-          purpose: 'email_verification',
-          tokenHash: hashToken(verificationCode),
-          expiresAt: new Date(Date.now() + codeTtlMinutes * 60 * 1000),
-        },
-      })
+        return {
+          userEmail: user.email,
+          code: verificationCode,
+          ttlMinutes: codeTtlMinutes,
+          preferredLocale: user.preferredLocale,
+        }
+      },
+    )
 
-      return { userEmail: user.email, code: verificationCode, ttlMinutes: codeTtlMinutes }
-    })
-
-    await this.mailService.sendVerificationCode(userEmail, code, ttlMinutes)
+    await this.mailService.sendVerificationCode(
+      userEmail,
+      code,
+      ttlMinutes,
+      resolveLocale(preferredLocale),
+    )
   }
 
   private issueToken(): { plaintext: string; tokenHash: string; expiresAt: Date } {

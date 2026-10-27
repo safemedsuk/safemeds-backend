@@ -1,6 +1,8 @@
 import { Body, Container, Head, Hr, Html, Preview, Section, Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { LogoMark } from './logo-mark';
 
 const BRAND_TEAL = '#0f766e';
@@ -27,17 +29,21 @@ interface EmailLayoutProps {
    * unaffected; pass `'external'` for anyone without a SafeMeds login.
    */
   recipientContext?: 'account' | 'external';
+  /** Defaults to English — every caller should pass the real recipient locale once known; see `MailService`'s own `locale` threading. */
+  locale?: SupportedLocale;
   children: React.ReactNode;
 }
 
 export function EmailLayout({
   previewText,
   heading,
-  eyebrow = 'Account security',
+  eyebrow,
   recipientEmail,
   recipientContext = 'account',
+  locale = DEFAULT_LOCALE,
   children,
 }: EmailLayoutProps): React.ReactElement {
+  const resolvedEyebrow = eyebrow ?? t(locale, 'layout.eyebrowDefault');
   return (
     <Html>
       <Head />
@@ -75,7 +81,7 @@ export function EmailLayout({
                       color: BRAND_TEAL,
                     }}
                   >
-                    {eyebrow}
+                    {resolvedEyebrow}
                   </Text>
                 </td>
               </tr>
@@ -102,24 +108,22 @@ export function EmailLayout({
           <Section style={{ padding: '20px 4px 0' }}>
             {recipientEmail && recipientContext === 'account' && (
               <Text style={{ fontSize: '12px', color: MUTED, margin: '0 0 8px' }}>
-                This email was sent to <strong>{recipientEmail}</strong> because it's associated with a SafeMeds
-                account or registration.
+                {t(locale, 'layout.trustFooterAccountPrefix')}
+                <strong>{recipientEmail}</strong> {t(locale, 'layout.trustFooterAccountSuffix')}
               </Text>
             )}
             {recipientEmail && recipientContext === 'external' && (
               <Text style={{ fontSize: '12px', color: MUTED, margin: '0 0 8px' }}>
-                This email was sent to <strong>{recipientEmail}</strong> because a company using SafeMeds has your
-                contact details in relation to a pharmacovigilance report or compliance matter — you don't have a
-                SafeMeds account.
+                {t(locale, 'layout.trustFooterExternalPrefix')}
+                <strong>{recipientEmail}</strong> {t(locale, 'layout.trustFooterExternalSuffix')}
               </Text>
             )}
             <Text style={{ fontSize: '12px', color: MUTED, margin: '0 0 8px' }}>
-              SafeMeds will never ask you for your password, a verification code, or your MFA code by email or
-              phone. If something in this message feels off, don't act on it — contact your company administrator.
+              {t(locale, 'layout.securityLine')}
             </Text>
             <Hr style={{ borderColor: BORDER, margin: '16px 0' }} />
             <Text style={{ fontSize: '11px', color: MUTED, margin: 0, textAlign: 'center' }}>
-              SafeMeds Compliance Platform · Audit-grade pharmacovigilance, quality &amp; regulatory infrastructure
+              {t(locale, 'layout.tagline')}
             </Text>
           </Section>
         </Container>

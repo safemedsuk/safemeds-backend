@@ -1,28 +1,33 @@
 import { Button, Text } from '@react-email/components';
 import * as React from 'react';
 
+import { t } from '../../../common/i18n/email-messages';
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale';
 import { EmailLayout } from './layout';
 
 interface PasswordResetEmailProps {
   resetUrl: string;
   expiresInMinutes: number;
   recipientEmail: string;
+  locale?: SupportedLocale;
 }
 
 export function PasswordResetEmail({
   resetUrl,
   expiresInMinutes,
   recipientEmail,
+  locale = DEFAULT_LOCALE,
 }: PasswordResetEmailProps): React.ReactElement {
   return (
     <EmailLayout
-      previewText="Reset your SafeMeds password"
-      heading="Reset your password"
-      eyebrow="Password reset requested"
+      previewText={t(locale, 'passwordReset.previewText')}
+      heading={t(locale, 'passwordReset.heading')}
+      eyebrow={t(locale, 'passwordReset.eyebrow')}
       recipientEmail={recipientEmail}
+      locale={locale}
     >
       <Text style={{ fontSize: '14px', color: '#3f3f46', lineHeight: '22px', margin: '0 0 20px' }}>
-        We received a request to reset the password for your SafeMeds account. Click below to choose a new one.
+        {t(locale, 'passwordReset.body')}
       </Text>
       <Button
         href={resetUrl}
@@ -36,12 +41,10 @@ export function PasswordResetEmail({
           display: 'inline-block',
         }}
       >
-        Reset my password
+        {t(locale, 'passwordReset.button')}
       </Button>
       <Text style={{ fontSize: '13px', color: '#71717a', margin: '20px 0 0' }}>
-        This link expires in {expiresInMinutes} minutes and can only be used once. If you didn't request a
-        password reset, no action is needed — your password will not be changed and you can safely ignore this
-        email.
+        {t(locale, 'passwordReset.footer', { minutes: String(expiresInMinutes) })}
       </Text>
     </EmailLayout>
   );

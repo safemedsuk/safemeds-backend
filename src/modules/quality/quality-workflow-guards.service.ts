@@ -195,6 +195,8 @@ export class QualityWorkflowGuards implements OnModuleInit {
               category: 'workflow_update',
               title: `Critical deviation raised: ${updated.deviationNumber}`,
               body: `"${updated.title}" was classified Critical and needs immediate attention.`,
+              type: 'critical_deviation_raised',
+              params: { deviationNumber: updated.deviationNumber, deviationTitle: updated.title },
               recordType: QUALITY_DEVIATION_RECORD_TYPE,
               recordId,
               email: { to: recipient.email },

@@ -56,7 +56,13 @@ export class DraftReviewReminderService {
     const drafts = await this.rls.runWithSystemAccess((tx) =>
       tx.case.findMany({
         where: { requiresDraftReview: true },
-        select: { id: true, companyId: true, referenceNumber: true, createdAt: true, draftClaimedBy: true },
+        select: {
+          id: true,
+          companyId: true,
+          referenceNumber: true,
+          createdAt: true,
+          draftClaimedBy: true,
+        },
       }),
     )
 
@@ -89,6 +95,11 @@ export class DraftReviewReminderService {
             body: draft.draftClaimedBy
               ? 'You claimed this draft — it still needs to be confirmed or rejected.'
               : 'This draft has been waiting for review — confirm it as a real case, or reject it with a reason.',
+            type: 'draft_review_due',
+            params: {
+              referenceNumber: draft.referenceNumber,
+              claimed: Boolean(draft.draftClaimedBy),
+            },
             recordType: PV_CASE_RECORD_TYPE,
             recordId: draft.id,
           })

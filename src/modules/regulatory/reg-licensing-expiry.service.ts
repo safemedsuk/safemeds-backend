@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 
+import { NotificationParams, NotificationType } from '../../common/i18n/notification-content'
 import { RlsService } from '../../common/rls/rls.service'
 import { AuditService } from '../audit/audit.service'
 import { NotificationsService } from '../notifications/notifications.service'
@@ -62,6 +63,8 @@ export class RegLicensingExpiryService {
         facility.id,
         'overdue',
         `Facility licence EXPIRED: ${facility.name} (licence ${facility.licenceNumber ?? 'unnumbered'})`,
+        'licensing_facility',
+        { overdue: true, name: facility.name, licenceNumber: facility.licenceNumber ?? undefined },
       )
       expired += 1
     }
@@ -85,6 +88,12 @@ export class RegLicensingExpiryService {
         facility.id,
         'due_soon',
         `Facility licence renewal approaching: ${facility.name}, due ${facility.licenceExpiresOn!.toISOString().slice(0, 10)}`,
+        'licensing_facility',
+        {
+          overdue: false,
+          name: facility.name,
+          dueDate: facility.licenceExpiresOn!.toISOString().slice(0, 10),
+        },
       )
       approaching += 1
     }
@@ -113,6 +122,8 @@ export class RegLicensingExpiryService {
         licence.id,
         'overdue',
         `Personnel licence EXPIRED: ${licence.licenceType} (${licence.licenceNumber})`,
+        'licensing_personnel',
+        { overdue: true, licenceType: licence.licenceType, licenceNumber: licence.licenceNumber },
       )
       expired += 1
     }
@@ -136,6 +147,13 @@ export class RegLicensingExpiryService {
         licence.id,
         'due_soon',
         `Personnel licence renewal approaching: ${licence.licenceType} (${licence.licenceNumber}), due ${licence.expiresOn!.toISOString().slice(0, 10)}`,
+        'licensing_personnel',
+        {
+          overdue: false,
+          licenceType: licence.licenceType,
+          licenceNumber: licence.licenceNumber,
+          dueDate: licence.expiresOn!.toISOString().slice(0, 10),
+        },
       )
       approaching += 1
     }
@@ -167,6 +185,12 @@ export class RegLicensingExpiryService {
         permit.id,
         'overdue',
         `Import/export permit EXPIRED: ${permit.permitType} (${permit.permitNumber ?? 'unnumbered'})`,
+        'licensing_permit',
+        {
+          overdue: true,
+          permitType: permit.permitType,
+          permitNumber: permit.permitNumber ?? undefined,
+        },
       )
       expired += 1
     }
@@ -193,6 +217,13 @@ export class RegLicensingExpiryService {
         permit.id,
         'due_soon',
         `Import/export permit renewal approaching: ${permit.permitType} (${permit.permitNumber ?? 'unnumbered'}), due ${permit.validTo!.toISOString().slice(0, 10)}`,
+        'licensing_permit',
+        {
+          overdue: false,
+          permitType: permit.permitType,
+          permitNumber: permit.permitNumber ?? undefined,
+          dueDate: permit.validTo!.toISOString().slice(0, 10),
+        },
       )
       approaching += 1
     }
@@ -206,6 +237,8 @@ export class RegLicensingExpiryService {
     recordId: string,
     urgency: 'due_soon' | 'overdue',
     title: string,
+    type: NotificationType,
+    params: NotificationParams,
   ): Promise<void> {
     await this.tasksService.escalateForRecord(companyId, recordType, recordId, urgency, title, {})
 
@@ -222,6 +255,8 @@ export class RegLicensingExpiryService {
         category: urgency === 'overdue' ? 'deadline_breached' : 'deadline_approaching',
         title,
         body: `${title}. Record: ${recordType}/${recordId}.`,
+        type,
+        params: { ...params, recordType, recordId },
         recordType,
         recordId,
       })

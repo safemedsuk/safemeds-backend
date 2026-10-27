@@ -192,7 +192,8 @@ export class CaseFollowUpService {
         if (!document) {
           throw new NotFoundException({
             code: 'NOT_FOUND',
-            message: 'Document not found for this company — upload it first via the documents endpoint',
+            message:
+              'Document not found for this company — upload it first via the documents endpoint',
           })
         }
       }
@@ -276,6 +277,7 @@ export class CaseFollowUpService {
               'closed_failed',
               'Reached the 28-day hard ceiling with no resolution',
               { ip: undefined },
+              'ceiling',
             )
             hardClosed += 1
             continue
@@ -448,6 +450,15 @@ export class CaseFollowUpService {
         body: canEmail
           ? `Automated follow-up email ${attemptNumber} sent to the reporter for case ${pvCase.referenceNumber}. Reporter contact: ${reporterContact}. Due to respond by ${dueDateStr}.`
           : `Follow-up ${attemptNumber} for case ${pvCase.referenceNumber} needs manual contact — ${consent.granted !== true ? 'contact consent not on file' : 'no reporter email on file'}. Reporter contact: ${reporterContact}. Please contact by ${dueDateStr} and log the outcome.`,
+        type: 'follow_up_contact',
+        params: {
+          attemptNumber: String(attemptNumber),
+          referenceNumber: pvCase.referenceNumber,
+          dueDate: dueDateStr,
+          reporterContact,
+          canEmail,
+          noConsent: consent.granted !== true,
+        },
         recordType: PV_CASE_RECORD_TYPE,
         recordId: pvCase.id,
         email: { to: recipient.email, actionUrl },
@@ -508,6 +519,8 @@ export class CaseFollowUpService {
         'closed_resolved',
         `Reporter responded on attempt ${attemptNumber}`,
         meta,
+        'responded',
+        attemptNumber,
       )
       return
     }
@@ -593,6 +606,7 @@ export class CaseFollowUpService {
         'closed_failed',
         'No response after 2 attempts',
         meta,
+        'noResponse',
       )
     }
   }
@@ -604,6 +618,8 @@ export class CaseFollowUpService {
     status: 'closed_resolved' | 'closed_failed',
     reason: string,
     meta: RequestMeta,
+    reasonKey: 'ceiling' | 'responded' | 'noResponse' = 'noResponse',
+    attemptNumber?: number,
   ): Promise<void> {
     if (followUp.status === 'closed_resolved' || followUp.status === 'closed_failed') return
 
@@ -637,6 +653,12 @@ export class CaseFollowUpService {
         category: 'case_follow_up',
         title: `Follow-up closed: ${status === 'closed_resolved' ? 'resolved' : 'failed to reach reporter'}`,
         body: reason,
+        type: 'follow_up_closed',
+        params: {
+          resolved: status === 'closed_resolved',
+          reasonKey,
+          attemptNumber: attemptNumber !== undefined ? String(attemptNumber) : undefined,
+        },
         recordType: PV_CASE_RECORD_TYPE,
         recordId: followUp.caseId,
       })
@@ -669,7 +691,11 @@ export class CaseFollowUpService {
       where: { recordType: PV_CASE_RECORD_TYPE, recordId: caseId },
       include: { currentState: true },
     })
-    if (!instance || instance.currentState.stateKey === 'intake' || instance.currentState.stateKey === 'triage') {
+    if (
+      !instance ||
+      instance.currentState.stateKey === 'intake' ||
+      instance.currentState.stateKey === 'triage'
+    ) {
       return
     }
 
@@ -692,7 +718,10 @@ export class CaseFollowUpService {
       recordType: PV_CASE_RECORD_TYPE,
       recordId: caseId,
       oldValue: { stateKey: fromStateKey },
-      newValue: { stateKey: 'triage', reason: 'Reporter provided new information during follow-up' },
+      newValue: {
+        stateKey: 'triage',
+        reason: 'Reporter provided new information during follow-up',
+      },
       ip: meta.ip,
     })
   }

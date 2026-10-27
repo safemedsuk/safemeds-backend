@@ -4,6 +4,8 @@ import { render } from '@react-email/render'
 import type { ReactElement } from 'react'
 import { Resend } from 'resend'
 
+import { t } from '../../../common/i18n/email-messages'
+import { DEFAULT_LOCALE, SupportedLocale } from '../../../common/i18n/locale'
 import { EnvConfig } from '../../../config/env.validation'
 import { ApprovalEmail } from '../emails/approval.email'
 import { InvitationEmail } from '../emails/invitation.email'
@@ -46,19 +48,29 @@ export class MailService {
     }
   }
 
-  async sendVerificationCode(to: string, code: string, expiresInMinutes: number): Promise<void> {
+  async sendVerificationCode(
+    to: string,
+    code: string,
+    expiresInMinutes: number,
+    locale: SupportedLocale = DEFAULT_LOCALE,
+  ): Promise<void> {
     await this.send(
       to,
-      'Verify your SafeMeds email address',
-      VerificationCodeEmail({ code, expiresInMinutes, recipientEmail: to }),
+      t(locale, 'verificationCode.subject'),
+      VerificationCodeEmail({ code, expiresInMinutes, recipientEmail: to, locale }),
     )
   }
 
-  async sendRegistrationApproved(to: string, companyName: string, loginUrl: string): Promise<void> {
+  async sendRegistrationApproved(
+    to: string,
+    companyName: string,
+    loginUrl: string,
+    locale: SupportedLocale = DEFAULT_LOCALE,
+  ): Promise<void> {
     await this.send(
       to,
-      'Your SafeMeds registration has been approved',
-      ApprovalEmail({ companyName, loginUrl, recipientEmail: to }),
+      t(locale, 'approval.subject'),
+      ApprovalEmail({ companyName, loginUrl, recipientEmail: to, locale }),
     )
   }
 
@@ -67,11 +79,12 @@ export class MailService {
     companyName: string,
     reason: string,
     registerUrl: string,
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
-      'Your SafeMeds registration was not approved',
-      RejectionEmail({ companyName, reason, registerUrl, recipientEmail: to }),
+      t(locale, 'rejection.subject'),
+      RejectionEmail({ companyName, reason, registerUrl, recipientEmail: to, locale }),
     )
   }
 
@@ -79,22 +92,28 @@ export class MailService {
     to: string,
     resetUrl: string,
     expiresInMinutes: number,
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
-      'Reset your SafeMeds password',
-      PasswordResetEmail({ resetUrl, expiresInMinutes, recipientEmail: to }),
+      t(locale, 'passwordReset.subject'),
+      PasswordResetEmail({ resetUrl, expiresInMinutes, recipientEmail: to, locale }),
     )
   }
 
-  async sendPasswordChangedConfirmation(to: string, occurredAt: Date): Promise<void> {
+  async sendPasswordChangedConfirmation(
+    to: string,
+    occurredAt: Date,
+    locale: SupportedLocale = DEFAULT_LOCALE,
+  ): Promise<void> {
     await this.send(
       to,
-      'Your SafeMeds password was changed',
+      t(locale, 'passwordChanged.subject'),
       PasswordChangedEmail({
         recipientEmail: to,
+        locale,
         occurredAt:
-          occurredAt.toLocaleString('en-GB', {
+          occurredAt.toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB', {
             dateStyle: 'medium',
             timeStyle: 'short',
             timeZone: 'UTC',
@@ -110,10 +129,11 @@ export class MailService {
     roleLabels: string[],
     acceptUrl: string,
     expiresInDays: number,
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
-      `You've been invited to join ${companyName} on SafeMeds`,
+      t(locale, 'invitation.subject', { companyName }),
       InvitationEmail({
         companyName,
         inviterName,
@@ -121,6 +141,7 @@ export class MailService {
         acceptUrl,
         expiresInDays,
         recipientEmail: to,
+        locale,
       }),
     )
   }
@@ -148,6 +169,7 @@ export class MailService {
     bodyText: string,
     actionUrl?: string,
     recipientContext: 'account' | 'external' = 'account',
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
@@ -158,6 +180,7 @@ export class MailService {
         actionUrl,
         recipientEmail: to,
         recipientContext,
+        locale,
       }),
     )
   }
@@ -173,19 +196,20 @@ export class MailService {
     companyName: string,
     missingFields: string[],
     originalSubject: string,
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
-      `Additional information needed — ${companyName} drug safety report`,
+      t(locale, 'caseIntakeFollowUp.subject', { companyName }),
       NotificationEmail({
-        heading: 'A few more details needed',
-        eyebrow: 'Drug safety report',
-        bodyText: `Thank you for your report to ${companyName}'s drug safety team (re: "${originalSubject}").\n\nTo process your report, we still need the following information. Please reply to this email with these details:`,
+        heading: t(locale, 'caseIntakeFollowUp.heading'),
+        eyebrow: t(locale, 'caseIntakeFollowUp.eyebrow'),
+        bodyText: t(locale, 'caseIntakeFollowUp.body', { companyName, originalSubject }),
         listItems: missingFields,
-        trailingText:
-          'If you believe you already included this information, please resend it as clearly labelled lines (e.g. "Product: ...", "Reaction: ...") so it can be captured accurately.',
+        trailingText: t(locale, 'caseIntakeFollowUp.trailer'),
         recipientEmail: to,
         recipientContext: 'external',
+        locale,
       }),
     )
   }
@@ -205,19 +229,20 @@ export class MailService {
     to: string,
     companyName: string,
     referenceNumber: string,
+    locale: SupportedLocale = DEFAULT_LOCALE,
   ): Promise<void> {
     await this.send(
       to,
-      `Report received — ${companyName}`,
+      t(locale, 'caseReceivedConfirmation.subject', { companyName }),
       NotificationEmail({
-        heading: 'Thank you — your report has been received',
-        eyebrow: 'Drug safety report',
-        bodyText: `Thank you for reporting a safety concern to ${companyName}. Your report has been recorded and will be reviewed by their safety team. No further action is needed from you right now.\n\nYour reference number is:`,
+        heading: t(locale, 'caseReceivedConfirmation.heading'),
+        eyebrow: t(locale, 'caseReceivedConfirmation.eyebrow'),
+        bodyText: t(locale, 'caseReceivedConfirmation.body', { companyName }),
         listItems: [referenceNumber],
-        trailingText:
-          'If you have more information to add, please reply to this email or use the same reporting channel again, quoting this reference number.',
+        trailingText: t(locale, 'caseReceivedConfirmation.trailer'),
         recipientEmail: to,
         recipientContext: 'external',
+        locale,
       }),
     )
   }

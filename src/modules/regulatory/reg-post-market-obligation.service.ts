@@ -552,6 +552,13 @@ export class RegPostMarketObligationService {
           category: 'deadline_breached',
           title,
           body: `${title}. Obligation ${obligation.id}.`,
+          type: 'post_market_obligation_overdue',
+          params: {
+            obligationType: obligation.obligationType.replace(/_/g, ' '),
+            registrationNumber: obligation.productRegistration.registrationNumber,
+            dueDate: obligation.dueAt.toISOString().slice(0, 10),
+            obligationId: obligation.id,
+          },
           recordType: REG_POST_MARKET_OBLIGATION_RECORD_TYPE,
           recordId: obligation.id,
         })

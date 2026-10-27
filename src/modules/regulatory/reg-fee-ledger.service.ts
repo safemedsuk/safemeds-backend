@@ -342,6 +342,14 @@ export class RegFeeLedgerService {
           category: 'deadline_breached',
           title,
           body: `${title}. Invoice ${invoice.id}.`,
+          type: 'fee_overdue',
+          params: {
+            feeType: invoice.feeType,
+            currency: invoice.currency,
+            amount: invoice.amount.toString(),
+            dueDate: invoice.dueAt.toISOString().slice(0, 10),
+            invoiceId: invoice.id,
+          },
           recordType: 'reg_fee_invoice',
           recordId: invoice.id,
         })
